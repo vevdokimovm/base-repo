@@ -25,7 +25,7 @@ set -u
 SRC="${SRC:-$HOME/Downloads/base-repo}"
 REPO_URL="${REPO_URL:-https://github.com/vevdokimovm/base-repo.git}"
 BRANCH="${BRANCH:-main}"
-MSG="${MSG:-release: v1.4.0 — reporting/versioning/experiments + sync tooling}"
+MSG="${MSG:-release: v1.5.0 — merge line C: kit naming, practice doc, auto-asset}"
 RETRIES="${RETRIES:-5}"; RETRY_SLEEP="${RETRY_SLEEP:-4}"
 # -----------------------------------------------------------------------------
 
@@ -101,4 +101,4 @@ if [ "$N" -le 1 ]; then
 else
   grn "✓ автопроверка: в дереве $N файлов (норма — ноль/один = баг)"
 fi
-ylw "Дальше по желанию — тег + Release v1.4.0 (описание в CHANGELOG): zsh \"$SRC/templates/publish.sh\" --minor"
+ylw "Дальше — тег + Release (описание в CHANGELOG): из свежего клона zsh templates/publish.sh --version $(cat VERSION 2>/dev/null || echo X.Y.Z) --auto-asset"

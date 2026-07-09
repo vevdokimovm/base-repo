@@ -64,6 +64,7 @@ publish.sh — автопуш версии (bump -> commit -> tag -> push -> Git
 Опции:
   --prerelease        пометить релиз как pre-release (или версия вида X.Y.Z-rcN)
   --asset PATH        приложить файл к GitHub Release (можно повторять)
+  --auto-asset        собрать и приложить zip-снапшот тега (git archive) — архив байт-в-байт равен дереву тега
   --no-release        только тег+пуш, без создания GitHub Release
   --dry-run           показать, что будет сделано, НИЧЕГО не меняя
   --help              эта справка
@@ -74,7 +75,7 @@ USAGE
 }
 
 # ------------------------------------------------------------ ПАРСИНГ АРГ ----
-BUMP=""; SET_VERSION=""; PRERELEASE=0; NO_RELEASE=0; DRY=0
+BUMP=""; SET_VERSION=""; PRERELEASE=0; NO_RELEASE=0; DRY=0; AUTO_ASSET=0
 ASSETS=""   # список ассетов через перевод строки (zsh/bash-safe, без массивов)
 
 while [ "$#" -gt 0 ]; do
@@ -85,6 +86,7 @@ while [ "$#" -gt 0 ]; do
     --patch)   BUMP="patch"; shift ;;
     --prerelease) PRERELEASE=1; shift ;;
     --asset)   ASSETS="${ASSETS}${2:-}"$'\n'; shift 2 ;;
+    --auto-asset) AUTO_ASSET=1; shift ;;
     --no-release) NO_RELEASE=1; shift ;;
     --dry-run) DRY=1; shift ;;
     --help|-h) usage; exit 0 ;;
@@ -206,6 +208,7 @@ if [ "$DRY" -eq 1 ]; then
   echo "  5) git push $REMOTE $TAG          (ретраи: $RETRIES)"
   if [ "$NO_RELEASE" -eq 0 ]; then
     echo "  6) gh release create $TAG --notes-file <notes>$([ "$PRERELEASE" -eq 1 ] && echo ' --prerelease')"
+    [ "$AUTO_ASSET" -eq 1 ] && echo "       + auto-asset: git archive -> <repo>-$TAG.zip"
     printf '%s' "$ASSETS" | while IFS= read -r a; do [ -n "$a" ] && echo "       + asset: $a"; done
   fi
   ok "DRY-RUN завершён."
@@ -234,6 +237,20 @@ retry "push ветки" push_branch || die "не удалось запушить
 ok "ветка $MAIN_BRANCH запушена"
 retry "push тега" push_tag || die "не удалось запушить тег после $RETRIES попыток"
 ok "тег $TAG запушен"
+
+# --------------------------------------------- АВТО-АССЕТ ИЗ ДЕРЕВА ТЕГА ------
+# (--auto-asset) zip-снапшот через git archive: байт-в-байт равен дереву тега,
+# не может разойтись с релизом (урок FINPILOT: единый формат артефакта).
+if [ "$AUTO_ASSET" -eq 1 ]; then
+  REPO_NAME="$(basename "$(git remote get-url "$REMOTE" 2>/dev/null || echo repo)" .git)"
+  AUTO_ZIP="$(mktemp -d)/${REPO_NAME}-${TAG}.zip"
+  if git archive --format=zip -o "$AUTO_ZIP" "$TAG" 2>/dev/null; then
+    ASSETS="${ASSETS}${AUTO_ZIP}"$'\n'
+    ok "auto-asset собран: ${REPO_NAME}-${TAG}.zip"
+  else
+    c_ylw "не смог собрать auto-asset (git archive) — релиз пойдёт без архива"
+  fi
+fi
 
 # ------------------------------------------------------ GITHUB RELEASE --------
 if [ "$NO_RELEASE" -eq 1 ]; then
