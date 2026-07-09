@@ -196,10 +196,20 @@ def report(rows):
 
 
 def main():
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    path = args[0] if args else os.path.join(os.path.dirname(__file__), "measurements.csv")
+    # Позиционный аргумент считаем путём к логу ТОЛЬКО если это реально .csv/существующий файл.
+    # Мусор (например залётный '#' от комментария в строке, если в zsh выключен interactive_comments)
+    # молча игнорируем и берём measurements.csv рядом. Так скрипт не падает от копипаста с комментарием.
+    here = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(here, "measurements.csv")
+    for a in sys.argv[1:]:
+        if a.startswith("--"):
+            continue
+        if os.path.isfile(a) or a.lower().endswith(".csv"):
+            path = a
+            break
     if not os.path.exists(path):
-        sys.exit(f"нет файла лога: {path}")
+        sys.exit(f"нет файла лога: {path}\n"
+                 f"положи measurements.csv рядом со скриптом или укажи путь к .csv явно.")
     rows = load(path)
     text = report(rows)
     print(text)
