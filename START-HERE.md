@@ -29,16 +29,25 @@
 
 ## Как применить к репе (5 шагов)
 
-1. Распакуй кит в корень репы. Появятся папка `00-infrastructure/` (документация) и
-   `templates/` (шаблоны README и `.gitignore`).
+1. Распакуй кит в корень репы. Появятся `00-infrastructure/` (документация-правила),
+   `templates/` (шаблоны) и `reports/` (система отчётности: шаблоны, гайды, реестры, папки по типам).
 2. Возьми `templates/REPO_README_TEMPLATE.md` → заполни под конкретную репу →
    положи как корневой `README.md`. Возьми `templates/gitignore.template` → `.gitignore`.
 3. Возьми `00-infrastructure/03-watchlog-template.md` → скопируй в `00-infrastructure/WATCHLOG.md`,
-   впиши имена своих аккаунтов и текущее состояние репы. Это живой журнал (см. п.4 кита).
-4. Прочитай `00-infrastructure/README.md` — там карта всех правил и порядок чтения.
-5. Первый этап работы с уже загруженной репой — **ревизия по правилам**:
+   впиши текущее состояние репы (аккаунты V/J/M/S уже прописаны). Возьми
+   `templates/CHANGELOG_TEMPLATE.md` → `CHANGELOG.md` — подробная append-only летопись
+   (`24-changelog-protocol.md`). Журнал + changelog — разные инструменты (снимок «где мы» vs история).
+4. Прочитай `00-infrastructure/README.md` (карта правил, порядок чтения) и
+   `00-infrastructure/18-documentation-philosophy.md` (дух: «больше = лучше», слово = триггер на
+   `.md`). Система отчётности — `19`–`24` + `reports/README.md`.
+5. Первый этап работы с уже загруженной репой — **ревизия по правилам** (`21-revision-protocol.md`):
    `06-volume-compression.md` (тяжёлое → `.md`) + `05-knowledge-base-rules.md`
-   (дубли/устаревшее/обобщение). Дальше — веди по журналу и триггерам.
+   (дубли/устаревшее/обобщение). Дальше — веди по журналу, changelog и триггерам; отчёты по событиям
+   создавай автоматически (`19`, `20`).
+6. Выпуск версий (когда репе нужны релизы): скопируй `templates/publish.sh` в корень, задай `VERSION`
+   и веди `CHANGELOG.md`. Релиз — одной командой: `zsh publish.sh --minor` (или `--patch`/`--major`/
+   `--version X.Y.Z`) → бамп → коммит → тег → пуш → GitHub Release с описанием из `CHANGELOG`. Правила
+   — `00-infrastructure/25-versioning-and-releases.md`.
 
 ## Карта base-repo
 
@@ -64,9 +73,23 @@
 | `00-infrastructure/15-gotchas-claude-git.md` | Сквозные грабли Claude+Git, приватность, мультиаккаунт |
 | `00-infrastructure/16-limits-empirical-estimate.md` | Эмпирическая оценка лимитов Claude (живая гипотеза) |
 | `00-infrastructure/17-interview-to-file-methodology.md` | Контекстные файлы/методички через структурированное интервью |
+| `00-infrastructure/18-documentation-philosophy.md` | **Философия документирования: «больше = лучше», слово = триггер, теория в доках, 4 аккаунта** |
+| `00-infrastructure/19-reporting-system.md` | Диспетчер отчётов: триггер → тип → шаблон → папка → реестр |
+| `00-infrastructure/20-knowledge-capture-protocol.md` | Автофиксация знаний по 7 триггерам (T1–T7) |
+| `00-infrastructure/21-revision-protocol.md` | Ревизия всего в репе: живое vs замороженное, оси |
+| `00-infrastructure/22-merge-protocol.md` | Слияние/форк линий между аккаунтами |
+| `00-infrastructure/23-session-continuity.md` | Чекпоинт-дисциплина + несколько аккаунтов |
+| `00-infrastructure/24-changelog-protocol.md` | Подробный `CHANGELOG`: полная история сделанного |
+| `00-infrastructure/25-versioning-and-releases.md` | Версии/теги/релизы + автопуш одной командой |
+| `00-infrastructure/26-claude-modes-cowork-vs-project.md` | Поверхности Claude: Chat / Project / Cowork / Code |
+| `00-infrastructure/27-claude-memory-and-instructions.md` | Слои памяти и инструкций Claude (методичка) |
 | `01-claude-context/` | **Единый кит контекста** для всех аккаунтов Claude (вход — `00_НАВИГАТОР.md`) |
+| `reports/README.md` | **Дом системы отчётности** — шаблоны, гайды, реестры, папки по типам (+ рубрика `situations/`) |
 | `templates/REPO_README_TEMPLATE.md` | Шаблон корневого README репы |
 | `templates/gitignore.template` | Базовый `.gitignore` |
+| `templates/CHANGELOG_TEMPLATE.md` | Шаблон подробного `CHANGELOG` |
+| `templates/publish.sh` | Скрипт автопуша версии (bump → commit → tag → push → GitHub Release) |
+| `VERSION` | Текущая версия репы (источник правды для `publish.sh`) |
 
 ## Отличие от FINPILOT
 
