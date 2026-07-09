@@ -83,8 +83,9 @@
 | `00-infrastructure/25-versioning-and-releases.md` | Версии/теги/релизы + автопуш одной командой |
 | `00-infrastructure/26-claude-modes-cowork-vs-project.md` | Поверхности Claude: Chat / Project / Cowork / Code |
 | `00-infrastructure/27-claude-memory-and-instructions.md` | Слои памяти и инструкций Claude (методичка) |
+| `00-infrastructure/28-empirical-experiment-methodology.md` | Система-экспериментатор: реверс-инжиниринг неизвестных количеств |
 | `01-claude-context/` | **Единый кит контекста** для всех аккаунтов Claude (вход — `00_НАВИГАТОР.md`) |
-| `reports/README.md` | **Дом системы отчётности** — шаблоны, гайды, реестры, папки по типам (+ рубрика `situations/`) |
+| `reports/README.md` | **Дом системы отчётности** — шаблоны, гайды, реестры, папки по типам (+ рубрика `situations/`, эксперименты `experiments/`) |
 | `templates/REPO_README_TEMPLATE.md` | Шаблон корневого README репы |
 | `templates/gitignore.template` | Базовый `.gitignore` |
 | `templates/CHANGELOG_TEMPLATE.md` | Шаблон подробного `CHANGELOG` |

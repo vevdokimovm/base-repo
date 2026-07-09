@@ -13,6 +13,7 @@
 | **Bug card (карточка дефекта)** | найден конкретный дефект | `bug_report_template.md` | `incidents_summary.md` |
 | **Pitfall (частая ошибка воркфлоу)** | повторяющаяся ошибка процесса, причина известна сразу | — (строка-урок) | `pitfalls.md` |
 | **Ситуация-репорт (рубрика)** | разбор крупной кампании целиком (было→сделали→что не так→уроки) | `situations/README.md` | таблица выпусков в `situations/` |
+| **Эксперимент/измерение** | реверс-инжиниринг неизвестной количественной величины (замеры + модель) | `../00-infrastructure/28-empirical-experiment-methodology.md` | `experiments/` (по теме) |
 
 Общая теория (культура blameless, RCA-методы, runbook, ADR/RFC, SLO/error budget) — отдельно в
 `documentation_methodology.md`.

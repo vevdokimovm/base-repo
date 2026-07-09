@@ -1,0 +1,3 @@
+date,surface,model,effort,input_tokens,output_tokens,tool_calls,attachments,turn_pos,cache_state,tokens_measured,pct_session,pct_week,baseline_id,notes
+2026-07-05,code,opus,normal,,,1,0,1,warm,48000,24,3,refactor-module,"Claude Code status line: exact tokens + %; clean calibration point"
+2026-07-08,web,unknown,high,,,8,1,mid,warm,,54,,,"heavy consolidation ~39min; model possibly Fable (if so, real Opus-eq work ~27%)"
