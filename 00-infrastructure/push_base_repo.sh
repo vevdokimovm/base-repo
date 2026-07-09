@@ -3,6 +3,11 @@
 # push_base_repo.sh — залить свежий base-repo в его УЖЕ существующую репу на
 #                     GitHub чистым коммитом (полная замена дерева).
 #
+# [СУПЕРСИД v1.7.0] Универсальный преемник — `templates/deploy_from_zip.sh`:
+# любая репа системы, zip -> push -> тег+Release одной командой (имя/версия из
+# обёртки/VERSION, те же защиты + publish.sh сам). Этот скрипт оставлен как
+# base-repo-специфичный шорткат с ручным MSG; для нового флоу бери преемника.
+#
 # Часть base-repo (00-infrastructure/). Обновление base-repo самой; раздачу его
 # в остальные 10 реп делает sync-all.sh (рядом).
 #
@@ -25,7 +30,7 @@ set -u
 SRC="${SRC:-$HOME/Downloads/base-repo}"
 REPO_URL="${REPO_URL:-https://github.com/vevdokimovm/base-repo.git}"
 BRANCH="${BRANCH:-main}"
-MSG="${MSG:-release: v1.5.0 — merge line C: kit naming, practice doc, auto-asset}"
+MSG="${MSG:-release: base-repo tree sync}"
 RETRIES="${RETRIES:-5}"; RETRY_SLEEP="${RETRY_SLEEP:-4}"
 # -----------------------------------------------------------------------------
 

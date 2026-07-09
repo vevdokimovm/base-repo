@@ -33,7 +33,7 @@
 | [02-methodology-library/](./02-methodology-library) | **Библиотека универсальных методичек** (порт из FINPILOT, «all in»): архитектура, кибербез, диаграммы/ГОСТы, исследования, наука и др. Навигатор и судьба файлов — в её README (ADR-001) |
 | [scripts/](./scripts) | Рабочие скрипты репы: `revision_check.py` — исполняемый гейт ревизии (ссылки, `#Uxxxx`, размеры) |
 | [reports/](./reports) | **Система отчётности: шаблоны, гайды, реестры, папки по типам** (диспетчер — `00-infrastructure/19`) |
-| [templates/](./templates) | Шаблоны: README репы, `.gitignore`, `CHANGELOG`, `publish.sh` (автопуш версий) |
+| [templates/](./templates) | Шаблоны: README репы, `.gitignore`, `CHANGELOG`, `ROADMAP`, `publish.sh` (автопуш версий), `deploy_from_zip.sh` (универсальный деплой любой репы из архива) |
 | [VERSION](./VERSION) | Текущая версия репы (источник правды для `publish.sh`) |
 
 ### Что внутри `00-infrastructure/`

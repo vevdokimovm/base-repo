@@ -48,6 +48,8 @@
    (дубли/устаревшее/обобщение). Дальше — веди по журналу, changelog и триггерам; отчёты по событиям
    создавай автоматически (`19`, `20`).
 6. Выпуск версий (когда репе нужны релизы): скопируй `templates/publish.sh` в корень, задай `VERSION`
+   (а весь путь «архив от Claude → запушенная репа с тегом и Release» закрывает одна команда
+   `zsh templates/deploy_from_zip.sh <zip>` — `25` §3)
    и веди `CHANGELOG.md`. Релиз — одной командой: `zsh publish.sh --minor` (или `--patch`/`--major`/
    `--version X.Y.Z`) → бамп → коммит → тег → пуш → GitHub Release с описанием из `CHANGELOG`. Правила
    — `00-infrastructure/25-versioning-and-releases.md`.
