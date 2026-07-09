@@ -37,11 +37,14 @@
    впиши текущее состояние репы (аккаунты V/J/M/S уже прописаны). Возьми
    `templates/CHANGELOG_TEMPLATE.md` → `CHANGELOG.md` — подробная append-only летопись
    (`24-changelog-protocol.md`). Журнал + changelog — разные инструменты (снимок «где мы» vs история).
+   Если у репы есть направление на несколько этапов — возьми `templates/ROADMAP_TEMPLATE.md` →
+   `ROADMAP.md` с указателем «СЛЕДУЮЩАЯ ЗАДАЧА» (`30-roadmap-protocol.md`).
 4. Прочитай `00-infrastructure/README.md` (карта правил, порядок чтения) и
    `00-infrastructure/18-documentation-philosophy.md` (дух: «больше = лучше», слово = триггер на
    `.md`). Система отчётности — `19`–`24` + `reports/README.md`.
-5. Первый этап работы с уже загруженной репой — **ревизия по правилам** (`21-revision-protocol.md`):
-   `06-volume-compression.md` (тяжёлое → `.md`) + `05-knowledge-base-rules.md`
+5. Первый этап работы с уже загруженной репой — **ревизия по правилам** (`21-revision-protocol.md`),
+   механику открывает гейт `python3 scripts/revision_check.py` (битые ссылки, `#Uxxxx`, размеры);
+   дальше смысловые оси: `06-volume-compression.md` (тяжёлое → `.md`) + `05-knowledge-base-rules.md`
    (дубли/устаревшее/обобщение). Дальше — веди по журналу, changelog и триггерам; отчёты по событиям
    создавай автоматически (`19`, `20`).
 6. Выпуск версий (когда репе нужны релизы): скопируй `templates/publish.sh` в корень, задай `VERSION`

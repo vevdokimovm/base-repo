@@ -30,6 +30,8 @@
 | [00-infrastructure/WATCHLOG.md](./00-infrastructure/WATCHLOG.md) | Живой журнал изменений инфраструктуры |
 | [00-infrastructure/CHANGELOG.md](./00-infrastructure/CHANGELOG.md) | История версий правил и стандартов |
 | [01-claude-context/](./01-claude-context) | Единый кит контекста для всех аккаунтов Claude: ядро, блоки, инструкции, проектные доки, анализ чатов |
+| [02-methodology-library/](./02-methodology-library) | **Библиотека универсальных методичек** (порт из FINPILOT, «all in»): архитектура, кибербез, диаграммы/ГОСТы, исследования, наука и др. Навигатор и судьба файлов — в её README (ADR-001) |
+| [scripts/](./scripts) | Рабочие скрипты репы: `revision_check.py` — исполняемый гейт ревизии (ссылки, `#Uxxxx`, размеры) |
 | [reports/](./reports) | **Система отчётности: шаблоны, гайды, реестры, папки по типам** (диспетчер — `00-infrastructure/19`) |
 | [templates/](./templates) | Шаблоны: README репы, `.gitignore`, `CHANGELOG`, `publish.sh` (автопуш версий) |
 | [VERSION](./VERSION) | Текущая версия репы (источник правды для `publish.sh`) |
@@ -67,6 +69,7 @@
 | `27-claude-memory-and-instructions.md` | Слои памяти и инструкций Claude (методичка) |
 | `28-empirical-experiment-methodology.md` | **Система-экспериментатор: реверс-инжиниринг неизвестных количеств** (декомпозиция, OFAT, авто-модель) |
 | `29-claude-in-practice.md` | Claude на практике: рабочие паттерны и набитые шишки |
+| `30-roadmap-protocol.md` | Живой роадмап: указатель «СЛЕДУЮЩАЯ ЗАДАЧА», алгоритм выбора, чекбокс-дисциплина |
 
 ### Что внутри `01-claude-context/`
 

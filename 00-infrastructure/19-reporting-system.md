@@ -20,12 +20,14 @@
 | Принято **архитектурное/структурное решение** | **ADR** | `reports/adr/adr_template.md` | `reports/adr/` | — (сквозная нумерация) |
 | **Слияние** разошедшихся линий/аккаунтов | **Merge-отчёт** | `reports/merges/merge_and_fork_guide.md` | `reports/merges/` | — |
 | Повторная **ошибка воркфлоу** (грабли) | **Pitfall** | одна строка-урок | `reports/pitfalls.md` | сам файл — реестр |
+| Нужно **измерить неизвестную величину** (реверс-инжиниринг: лимиты, расход, скорость) | **Эксперимент** | `../00-infrastructure/28-empirical-experiment-methodology.md` | `reports/experiments/<тема>/` | README темы (гипотеза+замеры) |
 
 ### Сводные / периодические (не событийный триггер, а по вехе/аудиту/прогону)
 
 | Повод | Тип отчёта | Шаблон | Папка |
 |---|---|---|---|
 | Закрытие вехи / крупного этапа | **Release-отчёт** | `reports/releases/release_report_template.md` | `reports/releases/` |
+| Завершилась **крупная многошаговая кампания** (миграция, массовая чистка, инфраструктурный проект) | **Ситуация-репорт** | `reports/situations/README.md` (формат рубрики) | `reports/situations/` (реестр — таблица выпусков там же) |
 | Аудит безопасности | **Security-аудит** | `reports/security/security_audit_template.md` | `reports/security/` |
 | Плановая ревизия репы | **Ревизия/аудит** | по образцу отчёта в `reports/audits/` | `reports/audits/` |
 | Существенное изменение требований (для code-реп) | **SRS** | шаблон требований проекта | `reports/requirements/` |
