@@ -4,6 +4,8 @@
 > FINPILOT (донор — приватная репа `personal-finance-dss`, срез v5.25.0, 2026-07-09).
 > Решение о переносе и его логика — `../reports/adr/adr_001_methodology_library.md`;
 > полная карта «что взято / что пропущено / почему» — `../reports/merges/merge_manifest_v1_6_0.md`.
+> **Второй свип (v1.8.0):** дочёсаны `knowledge/business/` и `knowledge/science/guides/` донора —
+> +9 универсалий (наука: публикации/степени; бизнес: CustDev-курс, международные рынки; QA).
 >
 > **Принцип — «all in, отбор потом»** (`18-documentation-philosophy.md` §2): лучше внести всё
 > универсальное сразу и убрать лишнее на ревизии, чем выбирать сейчас и потерять. Файлы внесены
@@ -40,6 +42,15 @@
 | `software_lifecycle_standard.md` | Стандарт управления жизненным циклом программного комплекса | `it-base` |
 | `team_roles_process_methodology.md` | Команда, роли, процесс и контроль задач в IT | `it-base` |
 | `naming_convention.md` | Конвенция имён code-репы (файлы, отчёты, миграции) — образец | остаётся (референс для code-реп) |
+| `solution_factory_course.md` | Конспект питч-курса «Фабрика решений»: CustDev, PSF/PMF, JTBD, TAM/SAM/SOM, юнит-экономика (примеры FINPILOT — боевые) | `it-base` / `misc-vault` |
+| `market_entry_domestic_vs_international.md` | Карта факторов «домашний рынок vs международный» — прикладывается к любому продукту | `it-base` / `misc-vault` |
+| `market_analysis_benchmarks_international.md` | Бенчмарки международной оценки: пороги TAM/SAM/SOM и метрик, отличия от РФ-оценки | `it-base` / `misc-vault` |
+| `scopus_wos_publication_guide.md` | Публикации Scopus/WoS: базы, квартили, процесс подачи, инструменты проверки | `edu-base` / `academic-portfolio` |
+| `rinc_vak_publication_guide.md` | Публикации РИНЦ/ВАК: требования, процесс, статусы | `edu-base` / `academic-portfolio` |
+| `academic_degrees_kandidat_doktor.md` | Кандидат и доктор наук: путь, требования, процедуры | `edu-base` / `academic-portfolio` |
+| `academic_degrees_titles_ru_world.md` | Степени и звания: система РФ против мировой (PhD и др.) | `edu-base` / `academic-portfolio` |
+| `article_chat_bootstrap_prompt.md` | Bootstrap-промпт чата написания научной статьи (рабочий шаблон Claude-сессии) | `edu-base` |
+| `QA.md` | QA-регламент code-репы: уровни тестирования (smoke/fast/full/deep), формат фиксации дефектов — образец | остаётся (референс для code-реп) |
 | `sandbox_runbook.md` | Раннбук песочницы Claude: готовые команды, известные грабли | остаётся (сквозной инструмент) |
 | `tool_call_channel_failures.md` | Сбой канала тул-коллов Claude: симптомы и протокол | остаётся (выжимка — `15-gotchas` §14) |
 | `engineering_practices.md` | Инженерные практики code-репы: TDD, гейты, DoD — образец | остаётся (референс для code-реп) |
