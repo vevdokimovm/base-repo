@@ -1,5 +1,9 @@
 # START HERE — `base-repo`, базовый класс для всех knowledge-реп
 
+> 🔴 **Claude: перед любым действием — [`00-CLAUDE-STOP.md`](00-CLAUDE-STOP.md).**
+> Обрыв канала tool-call (`court` + сырой `<invoke>`) — самая частая поломка процесса,
+> и она управляется поведением. Прочитать до первого вызова инструмента.
+
 > `base-repo` — это **базовый класс** твоей системы репозиториев (в терминах ООП):
 > один источник истины для правил, нейминга, стандартов и протоколов. Все тематические
 > репы (`academic-portfolio`, `it-base`, `truth-seeking`, `edu-base`, …) **наследуют**
@@ -90,12 +94,19 @@
 | `00-infrastructure/27-claude-memory-and-instructions.md` | Слои памяти и инструкций Claude (методичка) |
 | `00-infrastructure/28-empirical-experiment-methodology.md` | Система-экспериментатор: реверс-инжиниринг неизвестных количеств |
 | `00-infrastructure/29-claude-in-practice.md` | Claude на практике: рабочие паттерны, шишки, дисциплина сессий |
+| `00-infrastructure/31-media-and-photo-storage.md` | Фото/видео вне git: 3-2-1, диск + копия, каталог в репе |
+| `00-infrastructure/32-git-hooks-and-secret-scanning.md` | Хук против секретов и тяжёлых файлов; что делать при утечке токена |
+| `00-infrastructure/33-token-budget-and-modes.md` | Бюджет токенов и режимы чтения A–E (замерено, не из документации) |
+| `00-CLAUDE-STOP.md` | 🔴 **Вход для Claude:** обрыв канала tool-call + секреты. Читать первым |
+| `.githooks/pre-commit` | Хук: не пускает в коммит секреты, тяжёлые бинарники, `.zip`/`.docx` |
 | `01-claude-context/` | **Единый кит контекста** для всех аккаунтов Claude (вход — `00-navigator.md`) |
 | `reports/README.md` | **Дом системы отчётности** — шаблоны, гайды, реестры, папки по типам (+ рубрика `situations/`, эксперименты `experiments/`) |
 | `templates/REPO_README_TEMPLATE.md` | Шаблон корневого README репы |
 | `templates/gitignore.template` | Базовый `.gitignore` |
 | `templates/CHANGELOG_TEMPLATE.md` | Шаблон подробного `CHANGELOG` |
 | `templates/publish.sh` | Скрипт автопуша версии (bump → commit → tag → push → GitHub Release) |
+| `templates/deploy_from_zip.sh` | Архив от Claude → клон → чистая замена дерева → push (+ тег и Release) |
+| `templates/deploy_all.sh` | **Все репы одной командой**: прогон `deploy_from_zip.sh` по папке архивов |
 | `VERSION` | Текущая версия репы (источник правды для `publish.sh`) |
 
 ## Отличие от FINPILOT

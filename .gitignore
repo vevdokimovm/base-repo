@@ -33,3 +33,4 @@ temp/
 # *.docx
 # *.pdf
 # scans/
+__pycache__/
