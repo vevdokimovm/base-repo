@@ -1,5 +1,40 @@
 # CHANGELOG — история инфраструктуры
 
+## [1.11.0] — 2026-07-19 — Инцидент classifier-outage + два протокола (PDF-каналы, LLM study guide)
+
+Follow-up к v1.10.0: разобран баг с архивацией (Bash-канал резался «temporarily unavailable») и внесены два
+приложенных протокола. Флаг зоны соблюдён: PDF-эксперимент — в зоне base-repo (механика чтения Claude),
+LLM-гайд — тематический учебный контент, помечен кандидатом на переезд в `edu-base`.
+
+### Added
+- **`reports/incidents/bash_classifier_channel_outage_incident.md`** (INC-BASH-CLASSIFIER-OUTAGE) —
+  post-mortem: Bash-команды падали «temporarily unavailable / auto mode cannot determine safety» (outage
+  классификатора авто-режима), работа была на диске, упаковка встала. Корень внешний + управляемая часть
+  (долбёж идентичной командой, пере-нарратив). Профилактика: распознать сигнатуру, не долбить, упрощать,
+  backoff/`send_later`, держать ценное на диске.
+- **`reports/pitfalls.md` PIT-013** — «temporarily unavailable на Bash = outage классификатора, не кривая
+  команда»: не повторять идентично ≥2–3 раз, упростить+отложить, не пере-нарративить.
+- **`reports/experiments/pdf-delivery-channels/README.md`** — боевой бенчмарк: один PDF через 3 канала
+  (прямой в чат · ZIP · проект), vision vs OCR vs текстовый слой, инверсия тёмной темы, влияние DPI.
+  Инстанс метода `28`, подтверждает правила `33`.
+- **`02-methodology-library/llm_transformers_study_guide.md`** — учебный справочник LLM/трансформеры
+  (архитектура, обучение, «LLM OS», безопасность, глоссарий). **Зона:** тематический контент — кандидат на
+  переезд в `edu-base`/`it-base` (`01` §2.5); внесён по «all in, отбор потом».
+
+### Changed
+- `reports/incidents_summary.md` — строка INC-BASH-CLASSIFIER-OUTAGE (новое сверху).
+- `reports/experiments/README.md` — строка `pdf-delivery-channels/` в таблицу экспериментов.
+- `02-methodology-library/README.md` — строка навигатора `llm_transformers_study_guide.md` (кандидат `edu-base`).
+- `02-methodology-library/tool_call_channel_failures.md` §6 — линк на смежный режим сбоя канала (classifier
+  outage: INC-BASH-CLASSIFIER-OUTAGE / PIT-013).
+- `00-infrastructure/33-token-budget-and-modes.md` — кросс-ссылка на эмпирическое подтверждение правил
+  чтения (эксперимент `pdf-delivery-channels`).
+
+### Notes
+- **Зона (честно, `01` §2.5).** LLM study guide — тематический учебный контент, по правилам его дом
+  `edu-base`, не base-repo. Внесён в библиотеку с явной пометкой «кандидат на переезд» вместо тихого
+  залива в зону знаний — чтобы правило не нарушалось молча. PDF-эксперимент — в зоне (механика Claude).
+
 ## [1.10.0] — 2026-07-18 — Claude-инфраструктурный кластер: scheduled tasks, коннекторы, плагины, скиллы, артефакты, реверс-числа
 
 Внесён связный кластер методичек «как устроен сам Claude/Cowork и как этим пользоваться» — заполнил

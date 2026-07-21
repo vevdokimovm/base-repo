@@ -20,7 +20,13 @@
 ## §0. RESUME POINT — отсюда продолжаем
 
 - **[!] ПЕРЕД РАБОТОЙ:** прочитай протокол непрерывности вверху.
-- **Текущая точка:** **v1.10.0** (2026-07-18, Cowork V) — внесён **Claude-инфраструктурный кластер**
+- **Текущая точка:** **v1.11.0** (2026-07-19, Cowork V) — follow-up к кластеру: разобран инцидент
+  **INC-BASH-CLASSIFIER-OUTAGE** (Bash резался «temporarily unavailable» — outage классификатора
+  авто-режима; PIT-013: не долбить, упрощать, backoff) + внесены два приложенных протокола:
+  `reports/experiments/pdf-delivery-channels/` (бенчмарк 3 каналов чтения PDF, в зоне, подтверждает `33`)
+  и `02-methodology-library/llm_transformers_study_guide.md` (учебный LLM-справочник — **помечен кандидатом
+  на переезд в `edu-base`**, тематический контент вне зоны base-repo). CHANGELOG/VERSION/реестры обновлены.
+- **Предыдущая точка:** **v1.10.0** (2026-07-18, Cowork V) — внесён **Claude-инфраструктурный кластер**
   `34`–`41`: scheduled tasks с экспортом между аккаунтами (`34` + `templates/scheduled-tasks-export.yaml`,
   8 задач), MCP-коннекторы (`35`), плагины/маркетплейсы (`36`, установлен `Engineering`), система скиллов
   (`37`), артефакты/дизайн (`38`), **реверс-инжиниренные числа с уровнями доверия** (`39`, инстанс `28` +
@@ -29,12 +35,12 @@
   `reports/situations/2026-07-18-cowork-avtomatizatsiya-i-metodichki.md`. Анти-дубль соблюдён: методичку
   реверс-инжиниринга не создавали заново (уже была `28`), `39` — её инстанс. README/`08`/CHANGELOG/VERSION
   обновлены.
-- **Следующий шаг:** задеплоить v1.10.0 универсальной командой (SHA из чата):
-  `SHA=<sha> zsh ~/Downloads/deploy_from_zip.sh ~/Downloads/base-repo-v1_10_0.zip`. После деплоя —
-  развернуть 8 scheduled tasks на остальных аккаунтах из `templates/scheduled-tasks-export.yaml` (сперва
-  подключить коннекторы, `35`) и обновить Project knowledge 4 аккаунтов свежим китом. На горизонте:
-  синк `docs/` FINPILOT в Drive/Notion (чтобы дайджесты видели WATCHLOG); растаскивание
-  `02-methodology-library/` по кандидат-репам.
+- **Следующий шаг:** задеплоить **v1.11.0** универсальной командой (SHA из чата):
+  `SHA=<sha> zsh ~/Downloads/deploy_from_zip.sh ~/Downloads/base-repo-v1_11_0.zip` (вобрал v1.10.0 —
+  отдельно её пушить не нужно). После деплоя — развернуть 8 scheduled tasks на остальных аккаунтах из
+  `templates/scheduled-tasks-export.yaml` (сперва коннекторы, `35`) и обновить Project knowledge 4
+  аккаунтов. На горизонте: **переезд `llm_transformers_study_guide.md` в `edu-base`** (помечен кандидатом);
+  синк `docs/` FINPILOT в Drive/Notion; растаскивание `02-methodology-library/` по кандидат-репам.
 
 ## §1. Аккаунты и протокол вахты
 
@@ -59,6 +65,11 @@
   только инфраструктура и правила.
 
 ## §3. Последние 10 изменений (новое сверху; ровно 10)
+
+- **2026-07-19** — v1.11.0: инцидент INC-BASH-CLASSIFIER-OUTAGE (Bash «temporarily unavailable» = outage
+  классификатора; PIT-013) + 2 протокола: `reports/experiments/pdf-delivery-channels/` (бенчмарк 3 каналов
+  чтения PDF, подтверждает `33`) и `02-methodology-library/llm_transformers_study_guide.md` (учебный
+  LLM-справочник, помечен кандидатом на `edu-base` — вне зоны base-repo).
 
 - **2026-07-18** — v1.10.0: Claude-инфраструктурный кластер `34`–`41` (scheduled tasks + экспорт между
   аккаунтами, коннекторы, плагины, скиллы, артефакты/дизайн, реверс-числа с доверием, карта тулов,
@@ -100,13 +111,12 @@
   подсистема `reports/` (+ рубрика `situations/`), `publish.sh`+`CHANGELOG_TEMPLATE`+`VERSION`;
   манифест `reports/merges/merge_manifest_v1_3_0.md`; нумерация разрулена.
 
-- **2026-07-08** — v1.2.0: влиты `11-slimming-practicum` + `12-case-academic-portfolio`
-  (из academic-portfolio, там были 09/10) и `13`–`16` (лимиты GitHub/Claude, грабли,
-  эмпирическая оценка — из кита, там были 09–12); добавлен `17-interview-to-file-methodology`;
-  кросс-ссылки починены под новую нумерацию.
-
 ## §4. Находки и грабли (не переоткрывать)
 
+- **2026-07-18** — **«temporarily unavailable» на Bash = outage классификатора авто-режима, не кривая
+  команда.** `echo`/read-only идут мимо классификатора и работают; сложные команды режутся. Лечится: не
+  долбить идентично (≥2–3 фейла → упростить+отложить), backoff/`send_later`, не пере-нарративить. PIT-013 +
+  `reports/incidents/bash_classifier_channel_outage_incident.md`.
 - **2026-07-18** — **egress-allowlist песочницы Cowork — стена, не обходится кодом изнутри.**
   `api.telegram.org` даёт 403 на CONNECT-тоннель (бот/свой MCP внутри той же VM не помогают); GitHub —
   вообще без коннектора в реестре (видимость приватных реп только косвенно через письма Actions в Gmail).

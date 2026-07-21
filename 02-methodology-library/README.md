@@ -55,6 +55,7 @@
 | `tool_call_channel_failures.md` | Сбой канала тул-коллов Claude: симптомы и протокол | остаётся (выжимка — `15-gotchas` §14) |
 | `engineering_practices.md` | Инженерные практики code-репы: TDD, гейты, DoD — образец | остаётся (референс для code-реп) |
 | `test_run_optimization.md` | Что гонять и когда: узкий цикл vs полный прогон тестов | остаётся (референс для code-реп) |
+| `llm_transformers_study_guide.md` | Учебный справочник по LLM/трансформерам: архитектура (токены/embedding/attention/softmax), стадии обучения (pretrain/SFT/RLHF), «LLM OS», безопасность (jailbreak/prompt injection/data poisoning), глоссарий | **`edu-base`** / `it-base` (тематический учебный контент — кандидат на переезд, `01` §2.5) |
 
 > Шаблоны требований (`requirements_sop*.md`, `srs_guide.md`) и юзабилити-отчёта уехали не сюда,
 > а в свои типовые папки — `../reports/requirements/` и `../reports/testing/` (диспетчер `19` §1).
