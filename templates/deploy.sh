@@ -183,7 +183,7 @@ for z in "$DIR"/*.zip; do
   fi
 
   # (B) рабочие копии и дубликаты — НИКОГДА не публикуем: это дубль, а не поставка
-  if printf '%s' "$base" | LC_ALL=C grep -qiE '(^|[^a-zA-Z])copy([^a-zA-Z]|$)|\([0-9]+\)$'; then
+  if printf '%s' "$base" | LC_ALL=C grep -qiE '(^|[^a-zA-Z])copy([^a-zA-Z]|$)|\([0-9]+\)$|[0-9]+[._-][0-9]+[._-][0-9]+ [0-9]+$'; then
     DUPES="$DUPES
   $base.zip"; continue
   fi
@@ -220,11 +220,12 @@ for z in "$DIR"/*.zip; do
     fi
   fi
   if [ -z "$parsed" ]; then
-    case "$base" in
-      *[0-9]*) ylw "  ? $base.zip — есть цифры, но версия не читается. Канон: <repo>-vX.Y.Z.zip";;
-      *)       UNKNOWN="$UNKNOWN
-  $base.zip";;
-    esac
+    if printf '%s' "$base" | LC_ALL=C grep -qE '[0-9]+[._-][0-9]+'; then
+      ylw "  ? $base.zip — похоже на версию, но не читается. Канон: <repo>-vX.Y.Z.zip"
+    else
+      UNKNOWN="$UNKNOWN
+  $base.zip"
+    fi
     continue
   fi
   name="${parsed%% *}"; ver="${parsed#* }"

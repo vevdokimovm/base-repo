@@ -500,6 +500,26 @@ assert_contains "старая версия создана как не-latest" \
 assert_contains "старшая версия помечена latest" \
   "$(LC_ALL=C grep 'release create v2.0.0' "$GH_STORE/calls.log" | tail -1)" "--latest=true"
 
+case_ "38. macOS-хвост ' 1' после версии — это дубликат, а не нечитаемая версия"
+D="$SANDBOX/t38"; mkdir -p "$D"
+make_zip "$D" "dup-repo" "1.2.5" dot
+cp "$D/dup-repo-v1.2.5.zip" "$D/dup-repo_v1.2.5 1.zip"
+cp "$D/dup-repo-v1.2.5.zip" "$D/dup-repo_v1.2.5 2.zip"
+OUT="$(run_deploy "$D")"
+assert_contains "хвост опознан как дубликат" "$OUT" "рабочие копии и дубликаты"
+assert_missing "не жалуется на нечитаемую версию" "$OUT" "не читается"
+git clone -q "$REMOTES/dup-repo.git" "$SANDBOX/c38" 2>/dev/null
+assert_eq "оригинал опубликован ровно один раз" "$(git -C "$SANDBOX/c38" tag -l | LC_ALL=C grep -c .)" "1"
+
+case_ "39. Имя без версионного токена — тихий аудит, без жёлтой жалобы"
+D="$SANDBOX/t39"; mkdir -p "$D"
+make_zip "$D" "quiet-repo" "1.0.0" dot
+make_zip "$D" "tmp-repo" "9.9.9" dot; mv "$D/tmp-repo-v9.9.9.zip" "$D/recognition-test-session-1.zip"
+OUT="$(run_deploy "$D")"
+assert_contains "попало в аудит" "$OUT" "recognition-test-session-1.zip"
+assert_missing "без жалобы на версию" "$OUT" "не читается"
+[ ! -d "$REMOTES/recognition-test-session-1.git" ] && ok "репа не заведена" || bad "репа не заведена"
+
 # =============================================================================
 printf '\n\033[1m── Итог\033[0m\n'
 printf '  \033[32mпройдено: %s\033[0m\n' "$PASS"
