@@ -70,6 +70,9 @@ BACKFILL="${BACKFILL:-0}"
 SERVICE_RE="${SERVICE_RE:-^([0-9]+|files([ _-][0-9]+)?|[Aa]rchive([ _-][0-9]+)?|Downloads?)$}"
 # репы, у которых бывает вариантный постфикс в имени архива (finpilot_v6_20_1_intl)
 VARIANT_REPOS="${VARIANT_REPOS:-finpilot}"
+# имя архива != имя репы. Историческое: архивы finpilot_* принадлежат personal-finance-dss
+# (finpilot — публичное зеркало). Формат: "имя-в-архиве=имя-репы имя2=репа2"
+REPO_MAP="${REPO_MAP:-finpilot=personal-finance-dss}"
 
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
   C_RED=$'\033[31m'; C_GRN=$'\033[32m'; C_YLW=$'\033[33m'; C_CYN=$'\033[36m'
@@ -166,7 +169,7 @@ PYEOF
 # --- ШАГ 1. Инвентаризация архивов ----------------------------------------------
 bld "── Шаг 1. Ищу версионные архивы в $DIR"
 INDEX="$(mktemp)"
-NONCANON=""; DUPES=""; VARIANTS=""; N_SERVICE=0
+NONCANON=""; DUPES=""; VARIANTS=""; MAPPED=""; UNKNOWN=""; N_SERVICE=0
 for z in "$DIR"/*.zip; do
   [ -f "$z" ] || continue
   base="$(basename "$z" .zip)"
@@ -219,11 +222,22 @@ for z in "$DIR"/*.zip; do
   if [ -z "$parsed" ]; then
     case "$base" in
       *[0-9]*) ylw "  ? $base.zip — есть цифры, но версия не читается. Канон: <repo>-vX.Y.Z.zip";;
+      *)       UNKNOWN="$UNKNOWN
+  $base.zip";;
     esac
     continue
   fi
   name="${parsed%% *}"; ver="${parsed#* }"
   name="$(printf '%s' "$name" | sed -E 's/[-_. ]+$//')"
+  # переименование по карте: архив едет в ту репу, которой принадлежит
+  for _m in $REPO_MAP; do
+    case "$_m" in
+      "$name="*) _t="${_m#*=}"
+        [ "$_t" != "$name" ] && MAPPED="$MAPPED
+  $base.zip → репозиторий $_t (архив назван $name)"
+        name="$_t";;
+    esac
+  done
 
   # ПРЕДПОЛЁТНАЯ ПРОВЕРКА (дёшево — по списку файлов, без распаковки).
   # Делается ДО создания репы: иначе битый архив успевал породить на GitHub пустую
@@ -273,6 +287,14 @@ fi
 if [ -n "$VARIANTS" ]; then
   echo ""; cyn "  вариантные имена (постфикс отброшен, версия взята как есть):"
   printf '%s\n' "$VARIANTS" | sed '/^$/d'
+fi
+if [ -n "$MAPPED" ]; then
+  echo ""; cyn "  переименование по REPO_MAP (архив едет в другую репу):"
+  printf '%s\n' "$MAPPED" | sed '/^$/d'
+fi
+if [ -n "$UNKNOWN" ]; then
+  echo ""; dim "  не версионные архивы — не трогаю (для полноты картины):"
+  printf '%s\n' "$UNKNOWN" | sed '/^$/d' | while IFS= read -r _u; do dim "$_u"; done
 fi
 
 if [ ! -s "$INDEX" ]; then
@@ -346,6 +368,9 @@ ensure_release(){
   _r="$1"; _v="$2"; _n="$3"; _t="$4"; _z="${5:-}"
   [ "$HAVE_GH" -eq 1 ] || { ylw "    gh нет — релиз v$_v вручную"; return 0; }
   _aname="$_r-v$_v.zip"
+  # при заливке старых версий поверх новых GitHub иначе пометит старую как Latest
+  _top="$(git tag -l 'v*' 2>/dev/null | sed 's/^v//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)"
+  _lat="--latest=false"; [ -z "$_top" ] || [ "$_v" = "$_top" ] && _lat="--latest=true"
   if gh release view "v$_v" --repo "$OWNER/$_r" >/dev/null 2>&1; then
     if release_is_stub "$_r" "$_v" || [ "$FORCE" = "1" ]; then
       gh release edit "v$_v" --repo "$OWNER/$_r" --title "$_t" --notes-file "$_n" >/dev/null 2>&1 \
@@ -357,12 +382,12 @@ ensure_release(){
   else
     if [ "$ASSET" = "1" ] && [ -n "$_z" ]; then
       cp "$_z" "$WORK/$_aname"
-      gh release create "v$_v" "$WORK/$_aname" --repo "$OWNER/$_r" --title "$_t" --notes-file "$_n" >/dev/null 2>&1 \
+      gh release create "v$_v" "$WORK/$_aname" --repo "$OWNER/$_r" --title "$_t" --notes-file "$_n" $_lat >/dev/null 2>&1 \
         && { grn "    ✓ релиз v$_v (+ассет $_aname)"; note "$_r|v$_v|релиз|создан"; } \
         || { red "    ✗ релиз v$_v не создан"; note "$_r|v$_v|релиз|✗ ошибка"; }
       rm -f "$WORK/$_aname"; return 0
     fi
-    gh release create "v$_v" --repo "$OWNER/$_r" --title "$_t" --notes-file "$_n" >/dev/null 2>&1 \
+    gh release create "v$_v" --repo "$OWNER/$_r" --title "$_t" --notes-file "$_n" $_lat >/dev/null 2>&1 \
       && { grn "    ✓ релиз v$_v"; note "$_r|v$_v|релиз|создан"; } \
       || { red "    ✗ релиз v$_v не создан"; note "$_r|v$_v|релиз|✗ ошибка"; }
   fi

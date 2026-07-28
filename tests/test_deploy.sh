@@ -438,8 +438,18 @@ OUT="$(run_deploy "$D" || true)"
 assert_contains "finpilot распознан" "$OUT" "finpilot v6.20.1"
 assert_contains "постфикс показан вслух" "$OUT" "вариантные имена"
 assert_missing "чужая репа НЕ распознана по постфиксу" "$OUT" "══ Репозиторий: other-repo"
-git clone -q "$REMOTES/finpilot.git" "$SANDBOX/c33" 2>/dev/null
-assert_eq "finpilot опубликован" "$(tag_tree_version "$SANDBOX/c33" 6.20.1)" "6.20.1"
+# finpilot по REPO_MAP уезжает в personal-finance-dss (см. кейс 35)
+git clone -q "$REMOTES/personal-finance-dss.git" "$SANDBOX/c33" 2>/dev/null
+assert_eq "finpilot опубликован в свою репу" "$(tag_tree_version "$SANDBOX/c33" 6.20.1)" "6.20.1"
+
+# и БЕЗ постфикса — тот же маршрут (постфикс уберётся у пользователя в будущем)
+make_zip "$D" "finpilot" "6.21.0" dot
+OUT="$(run_deploy "$D")"
+git -C "$SANDBOX/c33" fetch -q origin --tags 2>/dev/null
+assert_contains "без постфикса тоже уехал в personal-finance-dss" \
+  "$(git -C "$SANDBOX/c33" tag -l | tr '\n' ' ')" "v6.21.0"
+assert_eq "обе версии в одной репе" \
+  "$(git -C "$SANDBOX/c33" tag -l | LC_ALL=C grep -c .)" "2"
 
 case_ "34. Не-UTF-8 имена внутри архива не роняют предполёт"
 D="$SANDBOX/t34"; mkdir -p "$D"
@@ -454,6 +464,41 @@ OUT="$(run_deploy "$D" 2>&1)"; rm -rf "$tmp"
 assert_missing "нет Illegal byte sequence" "$OUT" "Illegal byte sequence"
 git clone -q "$REMOTES/iota2-repo.git" "$SANDBOX/c34" 2>/dev/null
 assert_eq "репа опубликована" "$(tag_tree_version "$SANDBOX/c34" 1.0.0)" "1.0.0"
+
+case_ "35. REPO_MAP: архив едет в репу с другим именем"
+D="$SANDBOX/t35"; mkdir -p "$D"
+make_zip "$D" "finpilot" "6.20.1" dot
+mv "$D/finpilot-v6.20.1.zip" "$D/finpilot_v6_20_1_intl.zip"
+OUT="$(run_deploy "$D")"
+assert_contains "переименование объявлено" "$OUT" "personal-finance-dss"
+[ -d "$REMOTES/personal-finance-dss.git" ] && ok "запушено в целевую репу" || bad "запушено в целевую репу"
+[ ! -d "$REMOTES/finpilot.git" ] && ok "репа по имени архива НЕ создана" || bad "репа по имени архива НЕ создана"
+git clone -q "$REMOTES/personal-finance-dss.git" "$SANDBOX/c35" 2>/dev/null
+assert_eq "версия на месте" "$(tag_tree_version "$SANDBOX/c35" 6.20.1)" "6.20.1"
+assert_eq "ассет назван по РЕПЕ, не по архиву" \
+  "$(ls -1 "$GH_STORE/rel/personal-finance-dss/v6.20.1/assets")" "personal-finance-dss-v6.20.1.zip"
+
+case_ "36. Аудит: не версионные архивы перечислены, а не пропали молча"
+D="$SANDBOX/t36"; mkdir -p "$D"
+make_zip "$D" "psi2-repo" "1.0.0" dot
+make_zip "$D" "tmp-repo" "9.9.9" dot; mv "$D/tmp-repo-v9.9.9.zip" "$D/аыва.zip"
+make_zip "$D" "tmp-repo" "9.9.9" dot; mv "$D/tmp-repo-v9.9.9.zip" "$D/скрипты для работы.zip"
+OUT="$(run_deploy "$D")"
+assert_contains "блок аудита показан" "$OUT" "не версионные архивы"
+assert_contains "кириллическое имя названо" "$OUT" "аыва.zip"
+assert_contains "имя с пробелами названо" "$OUT" "скрипты для работы.zip"
+[ ! -d "$REMOTES/аыва.git" ] && ok "репа для мусора не создана" || bad "репа для мусора не создана"
+
+case_ "37. Latest: при backfill старая версия не помечается свежей"
+D="$SANDBOX/t37"; mkdir -p "$D"
+make_zip "$D" "lat-repo" "2.0.0" dot
+run_deploy "$D" >/dev/null
+make_zip "$D" "lat-repo" "1.0.0" dot
+OUT="$(BACKFILL=1 run_deploy "$D")"
+assert_contains "старая версия создана как не-latest" \
+  "$(LC_ALL=C grep 'release create v1.0.0' "$GH_STORE/calls.log" | tail -1)" "--latest=false"
+assert_contains "старшая версия помечена latest" \
+  "$(LC_ALL=C grep 'release create v2.0.0' "$GH_STORE/calls.log" | tail -1)" "--latest=true"
 
 # =============================================================================
 printf '\n\033[1m── Итог\033[0m\n'
