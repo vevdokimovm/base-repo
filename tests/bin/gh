@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# Стаб GitHub CLI для тестов deploy.sh. Хранит состояние в $GH_STORE:
+#   $GH_STORE/repos/<repo>              — файл-маркер существующей репы (внутри: visibility)
+#   $GH_STORE/rel/<repo>/<tag>/title    — заголовок релиза
+#   $GH_STORE/rel/<repo>/<tag>/body     — описание
+#   $GH_STORE/rel/<repo>/<tag>/assets/  — ассеты
+# Пишет журнал вызовов в $GH_STORE/calls.log — тесты по нему проверяют поведение.
+set -u
+STORE="${GH_STORE:?GH_STORE не задан}"
+mkdir -p "$STORE/repos" "$STORE/rel"
+echo "$*" >> "$STORE/calls.log"
+
+# --repo owner/name -> name; иначе берём из текущей папки-клона
+repo_arg() {
+  local prev="" a
+  for a in "$@"; do
+    [ "$prev" = "--repo" ] && { printf '%s' "${a##*/}"; return; }
+    prev="$a"
+  done
+  basename "$(pwd)"
+}
+
+case "${1:-}" in
+auth) echo "Logged in to github.com as testuser"; exit 0 ;;
+
+repo)
+  case "${2:-}" in
+  view)
+    name="${3##*/}"; [ -f "$STORE/repos/$name" ] && exit 0 || exit 1 ;;
+  create)
+    name="${3##*/}"
+    vis="private"; for a in "$@"; do [ "$a" = "--public" ] && vis="public"; done
+    echo "$vis" > "$STORE/repos/$name"
+    # боевой GitHub отдаёт пустую репу — эмулируем bare-remote
+    if [ -n "${REMOTE_BASE:-}" ] && [ ! -d "${REMOTE_BASE#file://}/$name.git" ]; then
+      git init -q --bare "${REMOTE_BASE#file://}/$name.git"
+    fi
+    exit 0 ;;
+  esac ;;
+
+release)
+  sub="${2:-}"; tag="${3:-}"; name="$(repo_arg "$@")"
+  d="$STORE/rel/$name/$tag"
+  case "$sub" in
+  view)
+    [ -d "$d" ] || exit 1
+    for a in "$@"; do
+      case "$a" in
+      body)   cat "$d/body"  2>/dev/null; exit 0 ;;
+      name)   cat "$d/title" 2>/dev/null; exit 0 ;;
+      assets) ls -1 "$d/assets" 2>/dev/null; exit 0 ;;
+      esac
+    done
+    exit 0 ;;
+  create|edit)
+    [ "$sub" = "edit" ] && [ ! -d "$d" ] && exit 1
+    mkdir -p "$d/assets"
+    prev=""
+    for a in "$@"; do
+      case "$prev" in
+      --title)      printf '%s' "$a" > "$d/title" ;;
+      --notes-file) cp "$a" "$d/body" ;;
+      --notes)      printf '%s' "$a" > "$d/body" ;;
+      esac
+      prev="$a"
+    done
+    # позиционные ассеты у create: gh release create <tag> [file...]
+    if [ "$sub" = "create" ]; then
+      shift 3 || true
+      prev=""
+      for a in "$@"; do
+        case "$prev" in --*) prev="$a"; continue ;; esac   # это значение флага, не ассет
+        case "$a" in --*) prev="$a"; continue ;; esac
+        [ -f "$a" ] && cp "$a" "$d/assets/$(basename "$a")"
+        prev="$a"
+      done
+    fi
+    exit 0 ;;
+  upload)
+    [ -d "$d" ] || exit 1
+    mkdir -p "$d/assets"; shift 3 || true
+    prev=""
+    for a in "$@"; do
+      case "$prev" in --*) prev="$a"; continue ;; esac
+      case "$a" in --*) prev="$a"; continue ;; esac
+      [ -f "$a" ] && cp "$a" "$d/assets/$(basename "$a")"
+      prev="$a"
+    done
+    exit 0 ;;
+  list)
+    ls -1 "$STORE/rel/$name" 2>/dev/null; exit 0 ;;
+  esac ;;
+esac
+exit 0
