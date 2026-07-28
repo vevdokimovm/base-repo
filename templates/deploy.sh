@@ -603,6 +603,20 @@ if [ -n "$NEW_REPOS" ]; then
   done
   case "$MAP" in "$WORK"*) MAP="";; esac
   TODAY="$(date +%Y-%m-%d)"
+
+  # Локального клона нет — берём base-repo с GitHub сами. Пользователь не должен
+  # ничего задавать руками: одна команда должна делать всё до конца.
+  MAP_AUTO=0
+  if [ -z "$MAP" ] && [ "$DRY" != "1" ]; then
+    MAPCLONE="$WORK/_map/base-repo"
+    mkdir -p "$WORK/_map"
+    # одна попытка, без retry: если base-repo нет или сети нет — не висим, а идём в фолбэк
+    if git clone -q --depth 1 "$REMOTE_BASE/base-repo.git" "$MAPCLONE" 2>/dev/null \
+       && [ -f "$MAPCLONE/repos-map.md" ]; then
+      MAP="$MAPCLONE"; MAP_AUTO=1
+      dim "  base-repo склонирована с GitHub для обновления карты"
+    fi
+  fi
   if [ -n "$MAP" ]; then
     for R in $NEW_REPOS; do
       if grep -q "^## .*\`$R\`" "$MAP/repos-map.md" 2>/dev/null; then
@@ -626,11 +640,22 @@ PYEOF
         "$TODAY" "$R" >> "$CL"
       note "$R|—|repos-map|добавлена (требует описания)"
     done
-    grn "✓ repos-map обновлена: $MAP/repos-map.md — опиши новые репы и закоммить"
+    if [ "$MAP_AUTO" = "1" ]; then
+      if ( cd "$MAP" && git add -A && \
+           git commit -q -m "repos-map: авторегистрация новых реп ($TODAY)" 2>/dev/null && \
+           git push -q origin HEAD 2>/dev/null ); then
+        grn "✓ repos-map обновлена и запушена в base-repo — опиши новые репы позже"
+      else
+        cp "$MAP/repos-map.md" "$HOME/Downloads/repos-map-updated.md" 2>/dev/null
+        ylw "  карта обновлена, но push не прошёл — копия: ~/Downloads/repos-map-updated.md"
+      fi
+    else
+      grn "✓ repos-map обновлена: $MAP/repos-map.md — опиши новые репы и закоммить"
+    fi
   else
     ADD="$HOME/Downloads/repos-map-additions.md"
-    ylw "  постоянный клон base-repo не найден (задай BASE_REPO=/путь)."
-    ylw "  Чтобы текст не потерялся, кладу его в: $ADD"
+    ylw "  base-repo недоступна (нет сети или репы) — карту обновлю текстом."
+    ylw "  Чтобы ничего не потерялось, кладу его в: $ADD"
     for R in $NEW_REPOS; do
       printf '\n## 🆕 `%s`\n**⚠️ НЕ ОПИСАНА.** Заведена автоматически деплойером %s. Опиши зону и убери маркер.\n' \
         "$R" "$TODAY" | tee -a "$ADD"

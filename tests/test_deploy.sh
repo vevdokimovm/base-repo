@@ -520,6 +520,26 @@ assert_contains "попало в аудит" "$OUT" "recognition-test-session-1.
 assert_missing "без жалобы на версию" "$OUT" "не читается"
 [ ! -d "$REMOTES/recognition-test-session-1.git" ] && ok "репа не заведена" || bad "репа не заведена"
 
+case_ "40. repos-map обновляется сама, без переменных окружения"
+MAPREMOTE="$REMOTES/base-repo.git"
+rm -rf "$MAPREMOTE" "$SANDBOX/mapseed"
+git init -q --bare "$MAPREMOTE"
+git clone -q "$MAPREMOTE" "$SANDBOX/mapseed" 2>/dev/null
+printf '# Карта\n\n**Актуальность:** 2026-01-01\n\n## `old-repo`\nОписание.\n\n---\n\n# 📐 Стандарт репозитория\n' \
+  > "$SANDBOX/mapseed/repos-map.md"
+printf '# CHANGELOG карты\n' > "$SANDBOX/mapseed/repos-map-CHANGELOG.md"
+echo "# base-repo" > "$SANDBOX/mapseed/README.md"
+( cd "$SANDBOX/mapseed" && git add -A && git commit -q -m init && git push -q origin HEAD:main 2>/dev/null )
+D="$SANDBOX/t40"; mkdir -p "$D"
+make_zip "$D" "brand-new-repo" "1.0.0" dot
+OUT="$(run_deploy "$D")"          # без BASE_REPO — намеренно
+assert_contains "карта склонирована сама" "$OUT" "склонирована с GitHub"
+assert_contains "карта запушена" "$OUT" "запушена"
+rm -rf "$SANDBOX/mapcheck"; git clone -q "$MAPREMOTE" "$SANDBOX/mapcheck" 2>/dev/null
+assert_contains "новая репа в карте на remote" "$(cat "$SANDBOX/mapcheck/repos-map.md")" "brand-new-repo"
+assert_contains "запись в истории карты" "$(cat "$SANDBOX/mapcheck/repos-map-CHANGELOG.md")" "brand-new-repo"
+assert_missing "не просит задать переменную" "$OUT" "BASE_REPO="
+
 # =============================================================================
 printf '\n\033[1m── Итог\033[0m\n'
 printf '  \033[32mпройдено: %s\033[0m\n' "$PASS"
