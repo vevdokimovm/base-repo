@@ -169,12 +169,53 @@ for z in "$DIR"/*.zip; do
   # macOS/браузер лепят хвосты: " copy", "-copy", "__copy_", " (1)", "(2)". Срезаем их,
   # иначе валидный архив просто не находится и человек думает, что скрипт сломан.
   clean="$(printf '%s' "$base" | sed -E 's/([ _-]*[Cc]opy[ _-]*)+$//; s/[ _-]*\([0-9]+\)$//; s/[ _-]+$//')"
-  parsed="$(printf '%s' "$clean" | sed -nE 's/^(.+)[-_]v([0-9]+)[._]([0-9]+)[._]([0-9]+)$/\1 \2.\3.\4/p')"
+  # ИСТОРИЧЕСКИЙ НЕЙМИНГ (§43): принимаем всё, что реально встречалось, чтобы старые архивы
+  # не выпадали из системы. Разделитель имя↔версия: - _ . или пробел; префикс v необязателен;
+  # разделитель внутри версии: . _ или -. Канон при этом один — точки, о нём говорим ниже.
+  parsed="$(printf '%s' "$clean" | sed -nE 's/^(.+)[-_. ]v?([0-9]+)[._-]([0-9]+)[._-]([0-9]+)$/\1 \2.\3.\4/p')"
   if [ -z "$parsed" ]; then
-    case "$base" in *[Vv][0-9]*) ylw "  ? $base.zip — похоже на версию, но имя не по стандарту: <repo>-vX.Y.Z.zip";; esac
+    # двухчастная версия (v1.2) — тоже историческая ошибка: достраиваем до X.Y.0
+    two="$(printf '%s' "$clean" | sed -nE 's/^(.+)[-_. ]v?([0-9]+)[._-]([0-9]+)$/\1 \2.\3.0/p')"
+    if [ -n "$two" ]; then
+      parsed="$two"
+      ylw "  ! $base.zip — версия из двух частей, читаю как ${two#* } (§43: всегда X.Y.Z)"
+    fi
+  fi
+  if [ -z "$parsed" ]; then
+    case "$base" in
+      *[0-9]*) ylw "  ? $base.zip — есть цифры, но версия не читается. Канон: <repo>-vX.Y.Z.zip";;
+    esac
     continue
   fi
   name="${parsed%% *}"; ver="${parsed#* }"
+  name="$(printf '%s' "$name" | sed -E 's/[-_. ]+$//')"
+
+  # ПРЕДПОЛЁТНАЯ ПРОВЕРКА (дёшево — по списку файлов, без распаковки).
+  # Делается ДО создания репы: иначе битый архив успевал породить на GitHub пустую
+  # репу-сироту, которую потом руками удалять. Поймано тестом 21.
+  if ! unzip -l "$z" >/dev/null 2>&1; then
+    red "  ✗ $base.zip — битый архив (не читается), пропускаю"; continue
+  fi
+  _ent="$(unzip -Z1 "$z" 2>/dev/null | grep -v '/$' | grep -vE '(^|/)__MACOSX/|(^|/)\.DS_Store$|(^|/)\._')"
+  _nf="$(printf '%s\n' "$_ent" | grep -c .)"
+  if [ "$_nf" -lt "$MIN_FILES" ]; then
+    red "  ✗ $base.zip — файлов $_nf (< $MIN_FILES), не похоже на репу — пропускаю"; continue
+  fi
+  if ! printf '%s\n' "$_ent" | grep -qE '(^|/)README\.md$'; then
+    red "  ✗ $base.zip — корень не опознан (нет README.md) — пропускаю"; continue
+  fi
+  # VERSION берём СТРОГО корневой. Глоб '*/VERSION' ловил ещё и вложенные репы
+  # (base-repo внутри dota-dossier) и склеивал их содержимое: "1.13.0"+"2.13.0".
+  _roots="$(printf '%s\n' "$_ent" | cut -d/ -f1 | sort -u | grep -c .)"
+  if [ "$_roots" = "1" ]; then
+    _wrap="$(printf '%s\n' "$_ent" | cut -d/ -f1 | sort -u)"
+    _vf="$(unzip -p "$z" "$_wrap/VERSION" 2>/dev/null | head -c 32 | tr -d ' \n\r')"
+  else
+    _vf="$(unzip -p "$z" 'VERSION' 2>/dev/null | head -c 32 | tr -d ' \n\r')"
+  fi
+  if [ -n "$_vf" ] && [ "$_vf" != "$ver" ]; then
+    red "  ✗ $base.zip — VERSION в дереве = $_vf, а архив v$ver — пропускаю"; continue
+  fi
   # §НЕЙМИНГ: канон — точки. Подчёркивания принимаем (легаси), но говорим об этом вслух.
   [ "$clean" = "$name-v$ver" ] || NONCANON="$NONCANON
   $base.zip → канон: $name-v$ver.zip"

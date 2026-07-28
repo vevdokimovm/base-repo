@@ -258,6 +258,156 @@ fi
 assert_missing "во временный клон не писали" "$OUT" "repo_deploy_"
 
 # =============================================================================
+case_ "16. Исторический нейминг: все встречавшиеся варианты читаются"
+D="$SANDBOX/t16"; mkdir -p "$D"
+make_zip "$D" "nu-repo" "1.0.0" dot
+# каждый вариант — настоящий архив своей версии, переименован в исторический формат
+set -- "1.1.0:nu-repo_v1.1.0" "1.2.0:nu-repo-v1_2_0" "1.3.0:nu-repo-v1-3-0" \
+       "1.4.0:nu-repo-1.4.0" "1.5.0:nu-repo_1.5.0"
+for pair in "$@"; do
+  v="${pair%%:*}"; fname="${pair#*:}"
+  make_zip "$D" "nu-repo" "$v" dot
+  mv "$D/nu-repo-v$v.zip" "$D/$fname.zip"
+done
+OUT="$(DRY=1 run_deploy "$D")"
+assert_contains "все шесть версий распознаны" "$OUT" "версий: 6"
+for v in 1.1.0 1.2.0 1.3.0 1.4.0 1.5.0; do
+  assert_contains "вариант с версией $v прочитан" "$OUT" "$v"
+done
+assert_contains "неканон помечен" "$OUT" "канон это ТОЧКИ"
+
+case_ "17. Двухчастная версия (v1.2) достраивается до X.Y.0"
+D="$SANDBOX/t17"; mkdir -p "$D"
+make_zip "$D" "xi-repo" "2.7.0" dot
+mv "$D/xi-repo-v2.7.0.zip" "$D/xi-repo-v2.7.zip"
+OUT="$(DRY=1 run_deploy "$D")"
+assert_contains "версия достроена" "$OUT" "2.7.0"
+assert_contains "сказано про правило" "$OUT" "всегда X.Y.Z"
+
+case_ "18. SemVer-сортировка: 2.9.0 младше 2.10.0 (не строковое сравнение)"
+D="$SANDBOX/t18"; mkdir -p "$D"
+for v in 2.9.0 2.10.0 2.12.0; do make_zip "$D" "omicron-repo" "$v" dot; done
+OUT="$(run_deploy "$D")"
+git clone -q "$REMOTES/omicron-repo.git" "$SANDBOX/c18" 2>/dev/null
+assert_eq "порядок публикации верный (HEAD = 2.12.0)" \
+  "$(git -C "$SANDBOX/c18" show "v2.12.0:VERSION" | tr -d ' \n')" "2.12.0"
+for v in 2.9.0 2.10.0 2.12.0; do
+  assert_eq "тег v$v → своё дерево" "$(tag_tree_version "$SANDBOX/c18" "$v")" "$v"
+done
+
+case_ "19. Плоская упаковка (без обёртки) — тоже работает"
+D="$SANDBOX/t19"; mkdir -p "$D"
+make_zip "$D" "pi-repo" "1.0.0" dot --flat
+OUT="$(run_deploy "$D")"
+git clone -q "$REMOTES/pi-repo.git" "$SANDBOX/c19" 2>/dev/null
+assert_eq "версия опубликована" "$(tag_tree_version "$SANDBOX/c19" 1.0.0)" "1.0.0"
+assert_contains "README в корне" "$(git -C "$SANDBOX/c19" ls-tree --name-only v1.0.0)" "README.md"
+
+case_ "20. Двойная обёртка (папка в папке) разворачивается"
+D="$SANDBOX/t20"; mkdir -p "$D"
+make_zip "$D" "rho-repo" "1.0.0" dot
+tmp="$(mktemp -d)"; ( cd "$tmp" && unzip -qo "$D/rho-repo-v1.0.0.zip" )
+mkdir -p "$tmp/outer" && mv "$tmp/rho-repo-v1.0.0" "$tmp/outer/"
+rm "$D/rho-repo-v1.0.0.zip"; ( cd "$tmp" && zip -qr "$D/rho-repo-v1.0.0.zip" outer )
+OUT="$(run_deploy "$D")"; rm -rf "$tmp"
+git clone -q "$REMOTES/rho-repo.git" "$SANDBOX/c20" 2>/dev/null
+assert_contains "обёртка развёрнута на 2 уровня" "$OUT" "уровней: 2"
+assert_contains "README в корне" "$(git -C "$SANDBOX/c20" ls-tree --name-only v1.0.0)" "README.md"
+
+case_ "21. Слишком мало файлов — не считаем это репой"
+D="$SANDBOX/t21"; mkdir -p "$D"
+tmp="$(mktemp -d)"; mkdir -p "$tmp/sigma-repo-v1.0.0"
+echo "# x" > "$tmp/sigma-repo-v1.0.0/README.md"; printf '1.0.0' > "$tmp/sigma-repo-v1.0.0/VERSION"
+( cd "$tmp" && zip -qr "$D/sigma-repo-v1.0.0.zip" . )
+OUT="$(run_deploy "$D")"; rm -rf "$tmp"
+assert_contains "отказ с объяснением" "$OUT" "не похоже на репу"
+[ ! -d "$REMOTES/sigma-repo.git" ] && ok "репа не создана" || bad "репа не создана"
+
+case_ "22. Битый zip не роняет батч — соседняя репа публикуется"
+D="$SANDBOX/t22"; mkdir -p "$D"
+make_zip "$D" "tau-repo" "1.0.0" dot
+printf 'это не zip' > "$D/upsilon-repo-v1.0.0.zip"
+OUT="$(run_deploy "$D")"
+assert_contains "битый архив назван" "$OUT" "upsilon-repo"
+git clone -q "$REMOTES/tau-repo.git" "$SANDBOX/c22" 2>/dev/null
+assert_eq "соседняя репа всё равно опубликована" "$(tag_tree_version "$SANDBOX/c22" 1.0.0)" "1.0.0"
+
+case_ "23. BACKFILL: старая версия по умолчанию не заливается"
+D="$SANDBOX/t23"; mkdir -p "$D"
+make_zip "$D" "phi-repo" "2.0.0" dot
+run_deploy "$D" >/dev/null
+make_zip "$D" "phi-repo" "1.0.0" dot
+OUT="$(run_deploy "$D")"
+assert_contains "старая версия пропущена" "$OUT" "ниже v2.0.0"
+OUT="$(BACKFILL=1 run_deploy "$D")"
+git clone -q "$REMOTES/phi-repo.git" "$SANDBOX/c23" 2>/dev/null
+assert_contains "с BACKFILL=1 залилась" "$(git -C "$SANDBOX/c23" tag -l | tr '\n' ' ')" "v1.0.0"
+
+case_ "24. FORCE: осмысленное описание перезаписывается только явно"
+GOOD="$(cat "$GH_STORE/rel/tau-repo/v1.0.0/body")"
+printf 'РУЧНОЕ ОПИСАНИЕ, написанное человеком и вполне осмысленное' > "$GH_STORE/rel/tau-repo/v1.0.0/body"
+OUT="$(REPAIR=1 run_deploy "$SANDBOX/t22")"
+assert_contains "без FORCE не тронуто" "$(cat "$GH_STORE/rel/tau-repo/v1.0.0/body")" "РУЧНОЕ ОПИСАНИЕ"
+OUT="$(REPAIR=1 FORCE=1 run_deploy "$SANDBOX/t22")"
+assert_contains "с FORCE=1 перезаписано из CHANGELOG" "$(cat "$GH_STORE/rel/tau-repo/v1.0.0/body")" "Опорный абзац"
+
+case_ "25. ASSETS_ONLY: догружает ассет, дерево не трогает"
+rm -rf "$GH_STORE/rel/tau-repo/v1.0.0/assets"; mkdir -p "$GH_STORE/rel/tau-repo/v1.0.0/assets"
+BEFORE="$(git -C "$SANDBOX/c22" rev-parse HEAD)"
+OUT="$(ASSETS_ONLY=1 run_deploy "$SANDBOX/t22")"
+assert_eq "ассет догружен" "$(ls -1 "$GH_STORE/rel/tau-repo/v1.0.0/assets")" "tau-repo-v1.0.0.zip"
+git -C "$SANDBOX/c22" fetch -q origin 2>/dev/null
+assert_eq "дерево не сдвинулось" "$(git -C "$SANDBOX/c22" rev-parse origin/main)" "$BEFORE"
+
+case_ "26. Кириллица и тире в описании не бьются (UTF-8 через notes-file)"
+assert_contains "русский текст цел" "$(cat "$GH_STORE/rel/alpha-repo/v1.0.0/body")" "Опорный абзац"
+assert_contains "em-dash из заголовка цел" "$(cat "$GH_STORE/rel/alpha-repo/v1.0.0/title")" "—"
+
+case_ "27. В папке нет архивов — понятное сообщение, а не молчание"
+D="$SANDBOX/t27"; mkdir -p "$D"; echo x > "$D/readme.txt"; echo y > "$D/notes.md"
+OUT="$(run_deploy "$D" || true)"
+assert_contains "объяснено, чего ждали" "$OUT" "версионных архивов не найдено"
+
+case_ "28. NO_COLOR: в пайп уходит чистый текст без ANSI"
+D="$SANDBOX/t28"; mkdir -p "$D"
+make_zip "$D" "chi-repo" "1.0.0" dot
+OUT="$(DRY=1 run_deploy "$D")"
+printf '%s' "$OUT" | grep -q "$(printf '\033')" && bad "ANSI-кодов нет в неинтерактивном выводе" || ok "ANSI-кодов нет в неинтерактивном выводе"
+
+case_ "29. Репа существует, но пустая (нет коммитов) — публикуем без падения"
+git init -q --bare "$REMOTES/psi-repo.git"
+echo private > "$GH_STORE/repos/psi-repo"
+D="$SANDBOX/t29"; mkdir -p "$D"
+make_zip "$D" "psi-repo" "1.0.0" dot
+OUT="$(run_deploy "$D")"
+git clone -q "$REMOTES/psi-repo.git" "$SANDBOX/c29" 2>/dev/null
+assert_eq "версия опубликована в пустую репу" "$(tag_tree_version "$SANDBOX/c29" 1.0.0)" "1.0.0"
+
+case_ "30. Несколько реп за один прогон — все обработаны"
+D="$SANDBOX/t30"; mkdir -p "$D"
+for r in aa-repo bb-repo cc-repo; do make_zip "$D" "$r" "1.0.0" dot; done
+OUT="$(run_deploy "$D")"
+for r in aa-repo bb-repo cc-repo; do
+  git clone -q "$REMOTES/$r.git" "$SANDBOX/c30-$r" 2>/dev/null
+  assert_eq "$r опубликована" "$(tag_tree_version "$SANDBOX/c30-$r" 1.0.0)" "1.0.0"
+done
+
+case_ "31. Вложенная репа со своим VERSION не путает предполёт (регресс на реальном архиве)"
+D="$SANDBOX/t31"; mkdir -p "$D"
+make_zip "$D" "omega-repo" "2.0.0" dot
+tmp="$(mktemp -d)"; ( cd "$tmp" && unzip -qo "$D/omega-repo-v2.0.0.zip" )
+mkdir -p "$tmp/omega-repo-v2.0.0/base-repo"
+printf '1.13.0' > "$tmp/omega-repo-v2.0.0/base-repo/VERSION"
+echo "# base" > "$tmp/omega-repo-v2.0.0/base-repo/README.md"
+rm "$D/omega-repo-v2.0.0.zip"; ( cd "$tmp" && zip -qr "$D/omega-repo-v2.0.0.zip" . )
+OUT="$(run_deploy "$D")"; rm -rf "$tmp"
+assert_missing "предполёт не склеил версии" "$OUT" "1.13.02.0.0"
+git clone -q "$REMOTES/omega-repo.git" "$SANDBOX/c31" 2>/dev/null
+assert_eq "репа с вложенной репой опубликована" "$(tag_tree_version "$SANDBOX/c31" 2.0.0)" "2.0.0"
+assert_contains "вложенная репа сохранена в дереве" \
+  "$(git -C "$SANDBOX/c31" ls-tree -r --name-only v2.0.0)" "base-repo/VERSION"
+
+# =============================================================================
 printf '\n\033[1m── Итог\033[0m\n'
 printf '  \033[32mпройдено: %s\033[0m\n' "$PASS"
 if [ "$FAIL" -gt 0 ]; then printf '  \033[31mпровалено: %s\033[0m\n' "$FAIL"; exit 1; fi
