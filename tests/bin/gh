@@ -87,8 +87,12 @@ release)
       prev="$a"
     done
     exit 0 ;;
+  delete)
+    [ -d "$d" ] || exit 1
+    rm -rf "$d"; exit 0 ;;
   list)
-    ls -1 "$STORE/rel/$name" 2>/dev/null; exit 0 ;;
+    for t in $(ls -1 "$STORE/rel/$name" 2>/dev/null); do printf '%s\tRelease\t%s\n' "$t" "$t"; done
+    exit 0 ;;
   esac ;;
 esac
 exit 0

@@ -330,12 +330,43 @@ WORK="$HOME/Downloads/repo_deploy_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$WORK" || die "mkdir $WORK"
 NEW_REPOS=""
 
+# --- поиск CHANGELOG где угодно в дереве ----------------------------------------
+# Канон — корень репы (§46), но исторически файл живёт и в docs/, и в
+# 00-infrastructure/, и глубже. Ищем везде и выбираем тот, где ЕСТЬ секция версии:
+# наличие секции — единственный надёжный признак «это наш журнал».
+# find_changelog <корень> <версия> -> путь или пусто
+find_changelog(){
+  _root="$1"; _fv="$2"
+  # 1) приоритетные места по порядку
+  for _c in "$_root/CHANGELOG.md" "$_root/docs/CHANGELOG.md" \
+            "$_root/00-infrastructure/CHANGELOG.md" "$_root/CHANGELOG" "$_root/Changelog.md"; do
+    [ -f "$_c" ] && LC_ALL=C grep -qE "^#+ *\\[?$_fv\\]?( |\$|—|-)" "$_c" 2>/dev/null && { printf '%s' "$_c"; return 0; }
+  done
+  # 2) поиск по всему дереву — сначала тот, где есть секция версии
+  _found="$(find "$_root" -maxdepth 4 -iname 'CHANGELOG*.md' \
+              ! -path '*/node_modules/*' ! -path '*/.git/*' ! -path '*/_archive/*' \
+              ! -iname '*TEMPLATE*' ! -iname '*repos-map*' 2>/dev/null)"
+  for _c in $_found; do
+    LC_ALL=C grep -qE "^#+ *\\[?$_fv\\]?( |\$|—|-)" "$_c" 2>/dev/null && { printf '%s' "$_c"; return 0; }
+  done
+  # 3) секции нет нигде — вернём хоть какой-то журнал (приоритет корню)
+  for _c in "$_root/CHANGELOG.md" "$_root/docs/CHANGELOG.md" "$_root/00-infrastructure/CHANGELOG.md"; do
+    [ -f "$_c" ] && { printf '%s' "$_c"; return 0; }
+  done
+  for _c in $_found; do [ -f "$_c" ] && { printf '%s' "$_c"; return 0; }; done
+  return 1
+}
+
 # --- вспомогательное: заголовок + описание релиза по стандарту -------------------
-# build_notes <changelog> <ver> <repo> <out.md>  -> печатает заголовок релиза
+# build_notes <корень-дерева> <ver> <repo> <out.md>  -> печатает заголовок релиза
 build_notes(){
-  _cl="$1"; _v="$2"; _r="$3"; _out="$4"
+  _clroot="$1"; _v="$2"; _r="$3"; _out="$4"
   _thesis=""
-  if [ -f "$_cl" ]; then
+  # принимаем и готовый путь к файлу, и корень дерева
+  if [ -f "$_clroot" ]; then _cl="$_clroot"; else _cl="$(find_changelog "$_clroot" "$_v" || true)"; fi
+  CL_USED="$_cl"
+  if [ -n "$_cl" ] && [ -f "$_cl" ]; then
+    case "$_cl" in "$_clroot/CHANGELOG.md") : ;; *) dim "    CHANGELOG: ${_cl#$_clroot/}" >&2 ;; esac
     _thesis="$(python3 "$PARSER" "$_cl" "$_v" "$_out" 2>"$WORK/parse_err.txt")"
     if [ $? -ne 0 ]; then
       ylw "    CHANGELOG: секции [$_v] нет — описание будет техническим" >&2
@@ -348,9 +379,16 @@ build_notes(){
         { ylw "    CHANGELOG: в заголовке нет тезиса — §2 стандарта" >&2; note "$_r|v$_v|формат|⚠ нет тезиса"; }
     fi
   else
-    ylw "    CHANGELOG.md не найден" >&2; note "$_r|v$_v|описание|⚠ нет CHANGELOG"
+    red "    ✗ CHANGELOG не найден нигде в дереве" >&2
+    note "$_r|v$_v|описание|✗ CHANGELOG не найден"
+    loud "$_r v$_v: CHANGELOG не найден — релиз без описания НЕ создаю"
+    printf '' > "$_out"; return 1
   fi
-  [ -s "$_out" ] || printf '## %s v%s\n\nСинхронизация дерева.\n' "$_r" "$_v" > "$_out"
+  if [ ! -s "$_out" ]; then
+    red "    ✗ в CHANGELOG нет секции [$_v] — релиз без описания не создаю" >&2
+    loud "$_r v$_v: в CHANGELOG нет секции — добавь её и перезапусти с REPAIR=1"
+    return 1
+  fi
   if [ -n "$_thesis" ]; then printf '%s v%s — %s\n' "$_r" "$_v" "$_thesis"
   else printf '%s v%s\n' "$_r" "$_v"; fi
 }
@@ -467,7 +505,7 @@ while IFS= read -r REPO; do
       V="${TAG#v}"
       case "$V" in ''|*[!0-9.]*) continue;; esac
       Z="$(awk -F'\t' -v r="$REPO" -v v="$V" '$1==r && $2==v{print $3; exit}' "$INDEX")"
-      TITLE="$(build_notes "$CLONE/CHANGELOG.md" "$V" "$REPO" "$NOTES_DIR/v$V.md")"
+      TITLE="$(build_notes "$CLONE" "$V" "$REPO" "$NOTES_DIR/v$V.md")"
       ylw "  → $TAG: $TITLE"
       ensure_release "$REPO" "$V" "$NOTES_DIR/v$V.md" "$TITLE" "$Z"
     done
@@ -524,7 +562,7 @@ while IFS= read -r REPO; do
       fi
     fi
 
-    TITLE="$(build_notes "$SRC/CHANGELOG.md" "$VER" "$REPO" "$NOTES_DIR/v$VER.md")"
+    TITLE="$(build_notes "$SRC" "$VER" "$REPO" "$NOTES_DIR/v$VER.md")"
     cyn "  заголовок релиза: $TITLE"
 
     find . -mindepth 1 -maxdepth 1 -not -name '.git' -exec rm -rf {} +   # PIT-004
@@ -575,18 +613,29 @@ while IFS= read -r REPO; do
   if [ "$HAVE_GH" -eq 1 ]; then
     echo ""; ylw "→ релизы"
     ALLTAGS="$(git tag -l 'v*' | sed 's/^v//' | sort -t. -k1,1n -k2,2n -k3,3n | tr '\n' ' ')"
+    NOREL=""
     for V in $ALLTAGS; do
       Z="$(awk -F'\t' -v r="$REPO" -v v="$V" '$1==r && $2==v{print $3; exit}' "$INDEX")"
       if ! gh release view "v$V" --repo "$OWNER/$REPO" >/dev/null 2>&1; then
-        [ -f "$NOTES_DIR/v$V.md" ] || TITLE="$(build_notes "$CLONE/CHANGELOG.md" "$V" "$REPO" "$NOTES_DIR/v$V.md")"
+        if [ ! -s "$NOTES_DIR/v$V.md" ]; then
+          TITLE="$(build_notes "$CLONE" "$V" "$REPO" "$NOTES_DIR/v$V.md")" || { NOREL="$NOREL v$V"; continue; }
+        fi
+        [ -s "$NOTES_DIR/v$V.md" ] || { NOREL="$NOREL v$V"; continue; }
         [ -n "${TITLE:-}" ] || TITLE="$REPO v$V"
         ensure_release "$REPO" "$V" "$NOTES_DIR/v$V.md" "$TITLE" "$Z"
       else
-        case " $PUBLISHED " in *" $V "*)
-          ensure_release "$REPO" "$V" "$NOTES_DIR/v$V.md" "$(build_notes "$CLONE/CHANGELOG.md" "$V" "$REPO" "$NOTES_DIR/v$V.md")" "$Z";;
-        esac
+        # существующий релиз: обновляем только у версий этого прогона либо в REPAIR
+        _touch=0
+        case " $PUBLISHED " in *" $V "*) _touch=1;; esac
+        [ "$REPAIR" = "1" ] && _touch=1
+        if [ "$_touch" = "1" ]; then
+          if T2="$(build_notes "$CLONE" "$V" "$REPO" "$NOTES_DIR/v$V.md")"; then
+            ensure_release "$REPO" "$V" "$NOTES_DIR/v$V.md" "$T2" "$Z"
+          fi
+        fi
       fi
     done
+    [ -n "$NOREL" ] && ylw "  без релиза (нет секции в CHANGELOG):$NOREL"
   fi
   grn "ГОТОВО: $REPO —$([ -n "$PUBLISHED" ] && echo "$PUBLISHED" || echo ' актуальна')"
 done < "$REPOLIST"

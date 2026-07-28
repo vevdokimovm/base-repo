@@ -540,6 +540,43 @@ assert_contains "новая репа в карте на remote" "$(cat "$SANDBOX
 assert_contains "запись в истории карты" "$(cat "$SANDBOX/mapcheck/repos-map-CHANGELOG.md")" "brand-new-repo"
 assert_missing "не просит задать переменную" "$OUT" "BASE_REPO="
 
+case_ "41. CHANGELOG в подпапке находится (регресс: 6 пустых релизов base-repo)"
+D="$SANDBOX/t41"; mkdir -p "$D"
+make_zip "$D" "sub-repo" "1.0.0" dot
+tmp="$(mktemp -d)"; ( cd "$tmp" && unzip -qo "$D/sub-repo-v1.0.0.zip" )
+mkdir -p "$tmp/sub-repo-v1.0.0/00-infrastructure"
+mv "$tmp/sub-repo-v1.0.0/CHANGELOG.md" "$tmp/sub-repo-v1.0.0/00-infrastructure/CHANGELOG.md"
+rm "$D/sub-repo-v1.0.0.zip"; ( cd "$tmp" && zip -qr "$D/sub-repo-v1.0.0.zip" . )
+OUT="$(run_deploy "$D")"; rm -rf "$tmp"
+assert_missing "не говорит, что не найден" "$OUT" "CHANGELOG не найден"
+assert_eq "заголовок с тезисом собран" \
+  "$(cat "$GH_STORE/rel/sub-repo/v1.0.0/title" 2>/dev/null)" "sub-repo v1.0.0 — Тезис версии 1.0.0"
+assert_contains "тело из CHANGELOG подпапки" "$(cat "$GH_STORE/rel/sub-repo/v1.0.0/body" 2>/dev/null)" "Опорный абзац"
+
+case_ "42. CHANGELOG глубоко в дереве — тоже находится"
+D="$SANDBOX/t42"; mkdir -p "$D"
+make_zip "$D" "deep-repo" "1.0.0" dot
+tmp="$(mktemp -d)"; ( cd "$tmp" && unzip -qo "$D/deep-repo-v1.0.0.zip" )
+mkdir -p "$tmp/deep-repo-v1.0.0/docs/meta/history"
+mv "$tmp/deep-repo-v1.0.0/CHANGELOG.md" "$tmp/deep-repo-v1.0.0/docs/meta/history/CHANGELOG.md"
+rm "$D/deep-repo-v1.0.0.zip"; ( cd "$tmp" && zip -qr "$D/deep-repo-v1.0.0.zip" . )
+OUT="$(run_deploy "$D")"; rm -rf "$tmp"
+assert_eq "тезис вытащен из глубины" \
+  "$(cat "$GH_STORE/rel/deep-repo/v1.0.0/title" 2>/dev/null)" "deep-repo v1.0.0 — Тезис версии 1.0.0"
+
+case_ "43. Нет секции в CHANGELOG — релиз НЕ создаётся, флаг поднят"
+D="$SANDBOX/t43"; mkdir -p "$D"
+make_zip "$D" "norel-repo" "1.0.0" dot
+tmp="$(mktemp -d)"; ( cd "$tmp" && unzip -qo "$D/norel-repo-v1.0.0.zip" )
+printf '# CHANGELOG\n\nПусто.\n' > "$tmp/norel-repo-v1.0.0/CHANGELOG.md"
+rm "$D/norel-repo-v1.0.0.zip"; ( cd "$tmp" && zip -qr "$D/norel-repo-v1.0.0.zip" . )
+OUT="$(run_deploy "$D")"; rm -rf "$tmp"
+assert_contains "сказано про отсутствие секции" "$OUT" "нет секции"
+assert_contains "поднят громкий флаг" "$OUT" "ТРЕБУЕТ"
+[ ! -d "$GH_STORE/rel/norel-repo/v1.0.0" ] && ok "пустой релиз НЕ создан" || bad "пустой релиз НЕ создан"
+git clone -q "$REMOTES/norel-repo.git" "$SANDBOX/c43" 2>/dev/null
+assert_eq "дерево и тег при этом на месте" "$(tag_tree_version "$SANDBOX/c43" 1.0.0)" "1.0.0"
+
 # =============================================================================
 printf '\n\033[1m── Итог\033[0m\n'
 printf '  \033[32mпройдено: %s\033[0m\n' "$PASS"
