@@ -138,13 +138,20 @@ assert_missing "__MACOSX выкинут" "$FILES" "__MACOSX"
 assert_missing ".DS_Store выкинут" "$FILES" ".DS_Store"
 
 # =============================================================================
-case_ "6. Мусорный хвост в имени файла (' copy', '(1)') не мешает"
+case_ "6. Рабочие копии и дубликаты НЕ публикуются, но названы вслух"
 D="$SANDBOX/t6"; mkdir -p "$D"
-make_zip "$D" "eps-repo" "1.0.0" dot
-mv "$D/eps-repo-v1.0.0.zip" "$D/eps-repo-v1.0.0 copy.zip"
+for tail in " copy" " (copy)" "__copy_" " (1)"; do
+  make_zip "$D" "eps-repo" "1.0.0" dot
+  mv "$D/eps-repo-v1.0.0.zip" "$D/eps-repo-v1.0.0$tail.zip"
+done
+OUT="$(run_deploy "$D" || true)"
+assert_contains "дубликаты названы" "$OUT" "рабочие копии и дубликаты"
+assert_missing "репа НЕ создана" "$OUT" "репозиторий создан"
+[ ! -d "$REMOTES/eps-repo.git" ] && ok "remote не появился" || bad "remote не появился"
+make_zip "$D" "eps-repo" "1.0.0" dot          # нормальное имя рядом — публикуется
 OUT="$(run_deploy "$D")"
 git clone -q "$REMOTES/eps-repo.git" "$SANDBOX/c6" 2>/dev/null
-assert_eq "архив с хвостом обработан" "$(git -C "$SANDBOX/c6" tag -l)" "v1.0.0"
+assert_eq "нормальный архив рядом опубликован" "$(git -C "$SANDBOX/c6" tag -l)" "v1.0.0"
 
 # =============================================================================
 case_ "7. Битый архив: нет README — версия пропускается, репа не разрушена"
@@ -406,6 +413,47 @@ git clone -q "$REMOTES/omega-repo.git" "$SANDBOX/c31" 2>/dev/null
 assert_eq "репа с вложенной репой опубликована" "$(tag_tree_version "$SANDBOX/c31" 2.0.0)" "2.0.0"
 assert_contains "вложенная репа сохранена в дереве" \
   "$(git -C "$SANDBOX/c31" ls-tree -r --name-only v2.0.0)" "base-repo/VERSION"
+
+case_ "32. Служебные архивы из чата игнорируются молча"
+D="$SANDBOX/t32"; mkdir -p "$D"
+make_zip "$D" "zeta2-repo" "1.0.0" dot
+for junk in "1" "16" "files" "files 10" "Archive_2"; do
+  make_zip "$D" "tmp-repo" "9.9.9" dot; mv "$D/tmp-repo-v9.9.9.zip" "$D/$junk.zip"
+done
+OUT="$(run_deploy "$D")"
+assert_contains "счётчик служебных показан" "$OUT" "пропущено служебных архивов: 5"
+assert_missing "нет жалоб на нечитаемую версию" "$OUT" "есть цифры, но версия не читается"
+[ ! -d "$REMOTES/files.git" ] && ok "репа files не заведена" || bad "репа files не заведена"
+[ ! -d "$REMOTES/1.git" ] && ok "репа 1 не заведена" || bad "репа 1 не заведена"
+git clone -q "$REMOTES/zeta2-repo.git" "$SANDBOX/c32" 2>/dev/null
+assert_eq "нормальная репа рядом опубликована" "$(tag_tree_version "$SANDBOX/c32" 1.0.0)" "1.0.0"
+
+case_ "33. Вариантный постфикс: только для реп из VARIANT_REPOS"
+D="$SANDBOX/t33"; mkdir -p "$D"
+make_zip "$D" "finpilot" "6.20.1" dot
+mv "$D/finpilot-v6.20.1.zip" "$D/finpilot_v6_20_1_intl.zip"
+make_zip "$D" "other-repo" "1.0.0" dot
+mv "$D/other-repo-v1.0.0.zip" "$D/other-repo_v1_0_0_intl.zip"
+OUT="$(run_deploy "$D" || true)"
+assert_contains "finpilot распознан" "$OUT" "finpilot v6.20.1"
+assert_contains "постфикс показан вслух" "$OUT" "вариантные имена"
+assert_missing "чужая репа НЕ распознана по постфиксу" "$OUT" "══ Репозиторий: other-repo"
+git clone -q "$REMOTES/finpilot.git" "$SANDBOX/c33" 2>/dev/null
+assert_eq "finpilot опубликован" "$(tag_tree_version "$SANDBOX/c33" 6.20.1)" "6.20.1"
+
+case_ "34. Не-UTF-8 имена внутри архива не роняют предполёт"
+D="$SANDBOX/t34"; mkdir -p "$D"
+tmp="$(mktemp -d)"; root="$tmp/iota2-repo-v1.0.0"; mkdir -p "$root/src"
+echo "# iota2-repo" > "$root/README.md"; printf '1.0.0' > "$root/VERSION"
+printf '# CHANGELOG\n\n## [1.0.0] — 2026-07-24 — Тезис (MINOR)\n\nАбзац.\n\n### Added\n- x\n' > "$root/CHANGELOG.md"
+echo a > "$root/src/main.py"; echo b > "$root/docs.md"; echo c > "$root/notes.md"
+# имя в CP1251 — невалидный UTF-8
+cp "$root/notes.md" "$root/$(printf '\xe4\xf0\xf3\xe3.md')" 2>/dev/null || true
+( cd "$tmp" && zip -qr "$D/iota2-repo-v1.0.0.zip" . )
+OUT="$(run_deploy "$D" 2>&1)"; rm -rf "$tmp"
+assert_missing "нет Illegal byte sequence" "$OUT" "Illegal byte sequence"
+git clone -q "$REMOTES/iota2-repo.git" "$SANDBOX/c34" 2>/dev/null
+assert_eq "репа опубликована" "$(tag_tree_version "$SANDBOX/c34" 1.0.0)" "1.0.0"
 
 # =============================================================================
 printf '\n\033[1m── Итог\033[0m\n'

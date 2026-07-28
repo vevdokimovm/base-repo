@@ -66,6 +66,10 @@ REPAIR="${REPAIR:-0}"
 FORCE="${FORCE:-0}"
 ASSETS_ONLY="${ASSETS_ONLY:-0}"
 BACKFILL="${BACKFILL:-0}"
+# служебные архивы (загрузки из чата, системные) — молча мимо, репу для них не заводим
+SERVICE_RE="${SERVICE_RE:-^([0-9]+|files([ _-][0-9]+)?|[Aa]rchive([ _-][0-9]+)?|Downloads?)$}"
+# репы, у которых бывает вариантный постфикс в имени архива (finpilot_v6_20_1_intl)
+VARIANT_REPOS="${VARIANT_REPOS:-finpilot}"
 
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
   C_RED=$'\033[31m'; C_GRN=$'\033[32m'; C_YLW=$'\033[33m'; C_CYN=$'\033[36m'
@@ -162,10 +166,24 @@ PYEOF
 # --- ШАГ 1. Инвентаризация архивов ----------------------------------------------
 bld "── Шаг 1. Ищу версионные архивы в $DIR"
 INDEX="$(mktemp)"
-NONCANON=""
+NONCANON=""; DUPES=""; VARIANTS=""; N_SERVICE=0
 for z in "$DIR"/*.zip; do
   [ -f "$z" ] || continue
   base="$(basename "$z" .zip)"
+
+  # (A) служебные архивы из чата (files 3.zip, 16.zip) — не наши артефакты, молча мимо
+  if printf '%s' "$base" | LC_ALL=C grep -qE "$SERVICE_RE"; then
+    N_SERVICE=$((N_SERVICE+1)); continue
+  fi
+  if [ -n "${IGNORE:-}" ] && printf '%s' "$base" | LC_ALL=C grep -qE "$IGNORE"; then
+    N_SERVICE=$((N_SERVICE+1)); continue
+  fi
+
+  # (B) рабочие копии и дубликаты — НИКОГДА не публикуем: это дубль, а не поставка
+  if printf '%s' "$base" | LC_ALL=C grep -qiE '(^|[^a-zA-Z])copy([^a-zA-Z]|$)|\([0-9]+\)$'; then
+    DUPES="$DUPES
+  $base.zip"; continue
+  fi
   # macOS/браузер лепят хвосты: " copy", "-copy", "__copy_", " (1)", "(2)". Срезаем их,
   # иначе валидный архив просто не находится и человек думает, что скрипт сломан.
   clean="$(printf '%s' "$base" | sed -E 's/([ _-]*[Cc]opy[ _-]*)+$//; s/[ _-]*\([0-9]+\)$//; s/[ _-]+$//')"
@@ -179,6 +197,23 @@ for z in "$DIR"/*.zip; do
     if [ -n "$two" ]; then
       parsed="$two"
       ylw "  ! $base.zip — версия из двух частей, читаю как ${two#* } (§43: всегда X.Y.Z)"
+    fi
+  fi
+  # вариантный постфикс (finpilot_v6_20_1_intl): срезаем ТОЛЬКО для реп из VARIANT_REPOS,
+  # чтобы случайно не откусить кусок имени у чужой репы
+  if [ -z "$parsed" ]; then
+    vclean="$(printf '%s' "$clean" | sed -E 's/[-_](intl|international|ru|en)$//')"
+    if [ "$vclean" != "$clean" ]; then
+      vparsed="$(printf '%s' "$vclean" | sed -nE 's/^(.+)[-_. ]v?([0-9]+)[._-]([0-9]+)[._-]([0-9]+)$/\1 \2.\3.\4/p')"
+      vname="$(printf '%s' "${vparsed%% *}" | sed -E 's/[-_. ]+$//')"
+      for vr in $VARIANT_REPOS; do
+        if [ -n "$vparsed" ] && [ "$vname" = "$vr" ]; then
+          parsed="$vparsed"
+          VARIANTS="$VARIANTS
+  $base.zip → $vr v${vparsed#* }"
+          break
+        fi
+      done
     fi
   fi
   if [ -z "$parsed" ]; then
@@ -196,19 +231,21 @@ for z in "$DIR"/*.zip; do
   if ! unzip -l "$z" >/dev/null 2>&1; then
     red "  ✗ $base.zip — битый архив (не читается), пропускаю"; continue
   fi
-  _ent="$(unzip -Z1 "$z" 2>/dev/null | grep -v '/$' | grep -vE '(^|/)__MACOSX/|(^|/)\.DS_Store$|(^|/)\._')"
-  _nf="$(printf '%s\n' "$_ent" | grep -c .)"
+  # LC_ALL=C: имена внутри архивов бывают не в UTF-8 (кириллица в CP1251, macOS-NFD).
+  # BSD-шные cut/grep под UTF-8 локалью на таких байтах падают с Illegal byte sequence.
+  _ent="$(unzip -Z1 "$z" 2>/dev/null | LC_ALL=C grep -v '/$' | LC_ALL=C grep -vE '(^|/)__MACOSX/|(^|/)\.DS_Store$|(^|/)\._')"
+  _nf="$(printf '%s\n' "$_ent" | LC_ALL=C grep -c .)"
   if [ "$_nf" -lt "$MIN_FILES" ]; then
     red "  ✗ $base.zip — файлов $_nf (< $MIN_FILES), не похоже на репу — пропускаю"; continue
   fi
-  if ! printf '%s\n' "$_ent" | grep -qE '(^|/)README\.md$'; then
+  if ! printf '%s\n' "$_ent" | LC_ALL=C grep -qE '(^|/)README\.md$'; then
     red "  ✗ $base.zip — корень не опознан (нет README.md) — пропускаю"; continue
   fi
   # VERSION берём СТРОГО корневой. Глоб '*/VERSION' ловил ещё и вложенные репы
   # (base-repo внутри dota-dossier) и склеивал их содержимое: "1.13.0"+"2.13.0".
-  _roots="$(printf '%s\n' "$_ent" | cut -d/ -f1 | sort -u | grep -c .)"
+  _roots="$(printf '%s\n' "$_ent" | LC_ALL=C cut -d/ -f1 | LC_ALL=C sort -u | LC_ALL=C grep -c .)"
   if [ "$_roots" = "1" ]; then
-    _wrap="$(printf '%s\n' "$_ent" | cut -d/ -f1 | sort -u)"
+    _wrap="$(printf '%s\n' "$_ent" | LC_ALL=C cut -d/ -f1 | LC_ALL=C sort -u)"
     _vf="$(unzip -p "$z" "$_wrap/VERSION" 2>/dev/null | head -c 32 | tr -d ' \n\r')"
   else
     _vf="$(unzip -p "$z" 'VERSION' 2>/dev/null | head -c 32 | tr -d ' \n\r')"
@@ -228,7 +265,23 @@ for z in "$DIR"/*.zip; do
   fi
   printf '%s\t%s\t%s\n' "$name" "$ver" "$z" >> "$INDEX"
 done
-[ -s "$INDEX" ] || die "версионных архивов не найдено (жду <repo>-vX_Y_Z.zip / <repo>_vX.Y.Z.zip)"
+[ "$N_SERVICE" -gt 0 ] && dim "  пропущено служебных архивов: $N_SERVICE (загрузки из чата, не наши артефакты)"
+if [ -n "$DUPES" ]; then
+  echo ""; ylw "  рабочие копии и дубликаты — НЕ публикую (переименуй, если это поставка):"
+  printf '%s\n' "$DUPES" | sed '/^$/d'
+fi
+if [ -n "$VARIANTS" ]; then
+  echo ""; cyn "  вариантные имена (постфикс отброшен, версия взята как есть):"
+  printf '%s\n' "$VARIANTS" | sed '/^$/d'
+fi
+
+if [ ! -s "$INDEX" ]; then
+  echo ""
+  if [ -n "$DUPES" ] || [ "$N_SERVICE" -gt 0 ]; then
+    die "версионных архивов к публикации нет — всё найденное отброшено как копии/служебное (см. выше)"
+  fi
+  die "версионных архивов не найдено (жду <repo>-vX.Y.Z.zip; принимаются и легаси-имена)"
+fi
 
 REPOLIST="$(mktemp)"
 cut -f1 "$INDEX" | sort -u > "$REPOLIST"
