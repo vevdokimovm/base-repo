@@ -196,9 +196,17 @@ assert_contains "заглушка приведена к стандарту" "$(c
 assert_eq "заголовок восстановлен с тезисом" \
   "$(cat "$GH_STORE/rel/alpha-repo/v1.0.0/title")" "alpha-repo v1.0.0 — Тезис версии 1.0.0"
 GOOD="$(cat "$GH_STORE/rel/alpha-repo/v1.0.0/body")"
-OUT="$(REPAIR=1 run_deploy "$SANDBOX/t1")"
-assert_eq "осмысленное описание не перезаписано" "$(cat "$GH_STORE/rel/alpha-repo/v1.0.0/body")" "$GOOD"
-assert_contains "сказано, что релиз заморожен" "$OUT" "не трогаю"
+OUT="$(run_deploy "$SANDBOX/t1")"
+assert_eq "совпадающее с CHANGELOG описание не трогается" "$(cat "$GH_STORE/rel/alpha-repo/v1.0.0/body")" "$GOOD"
+assert_missing "и об этом не шумит" "$OUT" "приведено к стандарту"
+# осмысленное, но РАСХОДЯЩЕЕСЯ с CHANGELOG — не трогаем, но говорим вслух
+printf 'Своё развёрнутое описание релиза, написанное руками, которое не совпадает с журналом и вполне осмысленно по содержанию.' \
+  > "$GH_STORE/rel/alpha-repo/v1.0.0/body"
+OUT="$(run_deploy "$SANDBOX/t1")"
+assert_contains "расхождение названо" "$OUT" "отличается от CHANGELOG"
+assert_contains "текст сохранён" "$(cat "$GH_STORE/rel/alpha-repo/v1.0.0/body")" "написанное руками"
+OUT="$(FORCE=1 run_deploy "$SANDBOX/t1")"
+assert_contains "с FORCE=1 синхронизировано" "$(cat "$GH_STORE/rel/alpha-repo/v1.0.0/body")" "Опорный абзац"
 
 # =============================================================================
 case_ "11. CHANGELOG без тезиса — предупреждение, но публикация идёт"
@@ -576,6 +584,36 @@ assert_contains "поднят громкий флаг" "$OUT" "ТРЕБУЕТ"
 [ ! -d "$GH_STORE/rel/norel-repo/v1.0.0" ] && ok "пустой релиз НЕ создан" || bad "пустой релиз НЕ создан"
 git clone -q "$REMOTES/norel-repo.git" "$SANDBOX/c43" 2>/dev/null
 assert_eq "дерево и тег при этом на месте" "$(tag_tree_version "$SANDBOX/c43" 1.0.0)" "1.0.0"
+
+case_ "44. Старые релизы чинятся САМИ, одной командой (без флагов)"
+D="$SANDBOX/t44"; mkdir -p "$D"
+make_zip "$D" "old-repo" "1.0.0" dot
+make_zip "$D" "old-repo" "1.1.0" dot
+# реальный CHANGELOG накапливает секции — в старшей версии есть обе
+tmp="$(mktemp -d)"; ( cd "$tmp" && unzip -qo "$D/old-repo-v1.1.0.zip" )
+printf '# CHANGELOG\n\n## [1.1.0] — 2026-07-28 — Тезис версии 1.1.0 (MINOR)\n\nОпорный абзац для 1.1.0: что сделано и зачем.\n\n### Added\n- пункт\n\n## [1.0.0] — 2026-07-24 — Тезис версии 1.0.0 (MINOR)\n\nОпорный абзац для 1.0.0: что сделано и зачем.\n\n### Added\n- пункт\n' \
+  > "$tmp/old-repo-v1.1.0/CHANGELOG.md"
+rm "$D/old-repo-v1.1.0.zip"; ( cd "$tmp" && zip -qr "$D/old-repo-v1.1.0.zip" . ); rm -rf "$tmp"
+run_deploy "$D" >/dev/null
+# портим как старые скрипты: заголовок без тезиса, тело-заглушка, ассет снесён
+printf 'old-repo v1.0.0' > "$GH_STORE/rel/old-repo/v1.0.0/title"
+printf 'Release 1.0.0' > "$GH_STORE/rel/old-repo/v1.0.0/body"
+rm -rf "$GH_STORE/rel/old-repo/v1.0.0/assets"; mkdir -p "$GH_STORE/rel/old-repo/v1.0.0/assets"
+printf 'old-repo v1.1.0' > "$GH_STORE/rel/old-repo/v1.1.0/title"
+rm -f "$D/old-repo-v1.0.0.zip"          # архива под рукой больше нет — только тег
+OUT="$(run_deploy "$D")"                 # БЕЗ REPAIR/FORCE — должно чиниться само
+assert_eq "заголовок восстановлен с тезисом" \
+  "$(cat "$GH_STORE/rel/old-repo/v1.0.0/title")" "old-repo v1.0.0 — Тезис версии 1.0.0"
+assert_contains "тело восстановлено из CHANGELOG" \
+  "$(cat "$GH_STORE/rel/old-repo/v1.0.0/body")" "Опорный абзац"
+assert_eq "ассет собран из тега" \
+  "$(ls -1 "$GH_STORE/rel/old-repo/v1.0.0/assets")" "old-repo-v1.0.0.zip"
+assert_contains "источник ассета назван" "$OUT" "из: тег"
+assert_eq "заголовок соседней версии тоже починен" \
+  "$(cat "$GH_STORE/rel/old-repo/v1.1.0/title")" "old-repo v1.1.0 — Тезис версии 1.1.0"
+OUT="$(run_deploy "$D")"
+assert_missing "повторный прогон не правит v1.0.0" "$OUT" "v1.0.0: заголовок и описание"
+assert_missing "повторный прогон не догружает ассет" "$OUT" "v1.0.0: ассет"
 
 # =============================================================================
 printf '\n\033[1m── Итог\033[0m\n'

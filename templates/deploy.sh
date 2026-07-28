@@ -2,10 +2,28 @@
 # =============================================================================
 # deploy.sh — ЕДИНЫЙ деплойер репозиториев. Один скрипт на всю систему.
 #
+# ┌───────────────────────────────────────────────────────────────────────────┐
+# │ ЖЕЛЕЗНОЕ ПРАВИЛО: ВТОРОГО СКРИПТА НЕ ЗАВОДИТСЯ. НИКОГДА.                   │
+# │                                                                           │
+# │ Понадобилась новая возможность — она становится РЕЖИМОМ (env-флагом)       │
+# │ внутри этого файла, и на неё пишется тест в tests/test_deploy.sh.          │
+# │ Не «быстренько отдельный скриптик рядом» — именно сюда.                    │
+# │                                                                           │
+# │ Почему это правило существует: восемь скриптов-предшественников появились  │
+# │ ровно так — каждый раз казалось, что проще написать новый, чем разобраться │
+# │ в старом. Итог: у каждой репы свой вариант деплоя, релизы в разных         │
+# │ форматах, никто не помнит, что запускать. Разгребали это неделю.           │
+# │                                                                           │
+# │ Рецидив был уже ПОСЛЕ консолидации: для починки старых релизов завели      │
+# │ отдельный fix_releases.sh — и тут же получили два скрипта вместо одного.   │
+# │ Слит обратно режимом. Если рука тянется создать файл рядом — читай         │
+# │ templates/README.md, там разобрано, почему это тупик.                      │
+# └───────────────────────────────────────────────────────────────────────────┘
+#
 # Заменяет собой все прежние вариации (publish.sh, deploy_all.sh, deploy_from_zip.sh,
 # deploy_all_versions.sh, commit_to_main.sh, commit_all_versions.sh, push_archives.sh,
-# push_base_repo.sh). Каждая из них умела свой кусок; здесь собран объединённый
-# рабочий процесс + починка того, что прежние версии делали не по стандарту.
+# push_base_repo.sh, fix_releases.sh). Каждая из них умела свой кусок; здесь собран
+# объединённый рабочий процесс + починка того, что прежние версии делали не по стандарту.
 # Разбор консолидации: reports/merges/scripts_consolidation_report.md
 #
 # ЧТО ДЕЛАЕТ (полный цикл, идемпотентно):
@@ -404,19 +422,41 @@ release_is_stub(){
 
 # ensure_release <repo> <ver> <notes.md> <title> <zip|"">
 ensure_release(){
-  _r="$1"; _v="$2"; _n="$3"; _t="$4"; _z="${5:-}"
+  _r="$1"; _v="$2"; _n="$3"; _t="$4"; _z="${5:-}"; _cl="${6:-}"
   [ "$HAVE_GH" -eq 1 ] || { ylw "    gh нет — релиз v$_v вручную"; return 0; }
   _aname="$_r-v$_v.zip"
-  # при заливке старых версий поверх новых GitHub иначе пометит старую как Latest
   _top="$(git tag -l 'v*' 2>/dev/null | sed 's/^v//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)"
   _lat="--latest=false"; [ -z "$_top" ] || [ "$_v" = "$_top" ] && _lat="--latest=true"
+
   if gh release view "v$_v" --repo "$OWNER/$_r" >/dev/null 2>&1; then
-    if release_is_stub "$_r" "$_v" || [ "$FORCE" = "1" ]; then
-      gh release edit "v$_v" --repo "$OWNER/$_r" --title "$_t" --notes-file "$_n" >/dev/null 2>&1 \
-        && { grn "    ✓ v$_v: описание приведено к стандарту"; note "$_r|v$_v|релиз|починен"; } \
-        || { red "    ✗ v$_v: не удалось обновить описание"; note "$_r|v$_v|релиз|✗ ошибка"; }
-    else
-      ylw "    v$_v: осмысленное описание на месте — не трогаю (заморожен)"
+    # ---- АУДИТ существующего релиза (идёт всегда, а не по флагу) ----------------
+    _ct="$(gh release view "v$_v" --repo "$OWNER/$_r" --json name --jq '.name' 2>/dev/null)"
+    _cb="$(gh release view "v$_v" --repo "$OWNER/$_r" --json body --jq '.body' 2>/dev/null)"
+    _fixt=0; _fixb=0
+    [ -n "$_t" ] || _t="$_ct"                       # нет эталона — сохраняем текущий
+    # заголовок: чиним, если расходится с эталоном из CHANGELOG
+    [ -n "$_t" ] && [ "$_ct" != "$_t" ] && _fixt=1
+    # тело: чиним заглушки; осмысленное, но расходящееся — только с FORCE
+    if release_is_stub "$_r" "$_v"; then _fixb=1
+    elif [ "$FORCE" = "1" ]; then _fixb=1
+    elif [ -s "$_n" ] && [ -n "$_cb" ]; then
+      if [ "$(printf '%s' "$_cb" | tr -d ' \n\r')" != "$(cat "$_n" | tr -d ' \n\r')" ]; then
+        ylw "    ~ v$_v: описание отличается от CHANGELOG — не трогаю (FORCE=1 чтобы синхронизировать)"
+        note "$_r|v$_v|описание|~ расходится с CHANGELOG"
+      fi
+    fi
+    if [ "$_fixt" = "1" ] || [ "$_fixb" = "1" ]; then
+      if [ "$_fixb" = "1" ]; then
+        # пустой заголовок НИКОГДА не отправляем — затрёт существующий
+        _targ=""; [ -n "$_t" ] && _targ="--title"
+        gh release edit "v$_v" --repo "$OWNER/$_r" ${_targ:+$_targ "$_t"} --notes-file "$_n" >/dev/null 2>&1 \
+          && { grn "    ✓ v$_v: заголовок и описание по стандарту"; note "$_r|v$_v|релиз|починен"; } \
+          || { red "    ✗ v$_v: не удалось обновить"; note "$_r|v$_v|релиз|✗ ошибка"; }
+      else
+        gh release edit "v$_v" --repo "$OWNER/$_r" --title "$_t" >/dev/null 2>&1 \
+          && { grn "    ✓ v$_v: заголовок → $_t"; note "$_r|v$_v|заголовок|починен"; } \
+          || { red "    ✗ v$_v: заголовок не обновлён"; note "$_r|v$_v|заголовок|✗ ошибка"; }
+      fi
     fi
   else
     if [ "$ASSET" = "1" ] && [ -n "$_z" ]; then
@@ -430,13 +470,24 @@ ensure_release(){
       && { grn "    ✓ релиз v$_v"; note "$_r|v$_v|релиз|создан"; } \
       || { red "    ✗ релиз v$_v не создан"; note "$_r|v$_v|релиз|✗ ошибка"; }
   fi
-  # канонический ассет: догружаем, если его нет (§4 стандарта — ровно 3 ассета)
-  if [ "$ASSET" = "1" ] && [ -n "$_z" ]; then
+
+  # ---- канонический ассет (§4: ровно 3 ассета) ---------------------------------
+  if [ "$ASSET" = "1" ]; then
     if ! gh release view "v$_v" --repo "$OWNER/$_r" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "$_aname"; then
-      cp "$_z" "$WORK/$_aname"
-      gh release upload "v$_v" "$WORK/$_aname" --repo "$OWNER/$_r" --clobber >/dev/null 2>&1 \
-        && { grn "    ✓ v$_v: ассет $_aname догружен"; note "$_r|v$_v|ассет|догружен"; }
-      rm -f "$WORK/$_aname"
+      _src=""
+      if [ -n "$_z" ] && [ -f "$_z" ]; then
+        cp "$_z" "$WORK/$_aname"; _src="архив"
+      elif [ -n "$_cl" ] && git -C "$_cl" rev-parse "v$_v" >/dev/null 2>&1; then
+        # Архива под рукой нет (старая версия) — собираем канонический zip из тега.
+        # Содержимое то же дерево, обёртка по §43.
+        git -C "$_cl" archive --format=zip --prefix="$_r-v$_v/" "v$_v" -o "$WORK/$_aname" 2>/dev/null && _src="тег"
+      fi
+      if [ -n "$_src" ] && [ -f "$WORK/$_aname" ]; then
+        gh release upload "v$_v" "$WORK/$_aname" --repo "$OWNER/$_r" --clobber >/dev/null 2>&1 \
+          && { grn "    ✓ v$_v: ассет $_aname догружен (из: $_src)"; note "$_r|v$_v|ассет|догружен ($_src)"; } \
+          || { red "    ✗ v$_v: ассет не загрузился"; note "$_r|v$_v|ассет|✗ ошибка"; }
+        rm -f "$WORK/$_aname"
+      fi
     fi
   fi
 }
@@ -622,16 +673,15 @@ while IFS= read -r REPO; do
         fi
         [ -s "$NOTES_DIR/v$V.md" ] || { NOREL="$NOREL v$V"; continue; }
         [ -n "${TITLE:-}" ] || TITLE="$REPO v$V"
-        ensure_release "$REPO" "$V" "$NOTES_DIR/v$V.md" "$TITLE" "$Z"
+        ensure_release "$REPO" "$V" "$NOTES_DIR/v$V.md" "$TITLE" "$Z" "$CLONE"
       else
-        # существующий релиз: обновляем только у версий этого прогона либо в REPAIR
-        _touch=0
-        case " $PUBLISHED " in *" $V "*) _touch=1;; esac
-        [ "$REPAIR" = "1" ] && _touch=1
-        if [ "$_touch" = "1" ]; then
-          if T2="$(build_notes "$CLONE" "$V" "$REPO" "$NOTES_DIR/v$V.md")"; then
-            ensure_release "$REPO" "$V" "$NOTES_DIR/v$V.md" "$T2" "$Z"
-          fi
+        # Существующий релиз проверяется ВСЕГДА: сверка с CHANGELOG, заголовок, ассет.
+        # Ничего не ломаем — правится только то, что расходится со стандартом.
+        if T2="$(build_notes "$CLONE" "$V" "$REPO" "$NOTES_DIR/v$V.md" 2>/dev/null)"; then
+          ensure_release "$REPO" "$V" "$NOTES_DIR/v$V.md" "$T2" "$Z" "$CLONE"
+        else
+          # секции нет — описание не трогаем, но ассет доложить обязаны
+          ensure_release "$REPO" "$V" "$NOTES_DIR/v$V.md" "" "$Z" "$CLONE"
         fi
       fi
     done
