@@ -390,7 +390,11 @@ assert_contains "em-dash из заголовка цел" "$(cat "$GH_STORE/rel/a
 case_ "C8" "В папке нет архивов — понятное сообщение, а не молчание"
 D="$SANDBOX/t27"; mkdir -p "$D"; echo x > "$D/readme.txt"; echo y > "$D/notes.md"
 OUT="$(run_deploy "$D" || true)"
-assert_contains "объяснено, чего ждали" "$OUT" "версионных архивов не найдено"
+assert_contains "сказано, что публиковать нечего" "$OUT" "Публиковать нечего"
+assert_contains "подсказан канон имени" "$OUT" "<repo>-vX.Y.Z.zip"
+assert_missing "это НЕ ошибка" "$OUT" "ОШИБКА"
+( cd "$D" && bash "$DEPLOY" "$D" >/dev/null 2>&1 ) \
+  && ok "код возврата 0 — пустая папка не провал" || bad "код возврата 0 — пустая папка не провал"
 
 case_ "I2" "NO_COLOR: в пайп уходит чистый текст без ANSI"
 D="$SANDBOX/t28"; mkdir -p "$D"
@@ -926,6 +930,17 @@ OUT="$(MIN_FREE_MB=99999999 run_deploy "$D" || true)"
 assert_contains "сказано про нехватку места" "$OUT" "свободно всего"
 assert_contains "объяснено, чем это грозит" "$OUT" "недокачанный ассет"
 [ ! -d "$REMOTES/space-repo.git" ] && ok "ничего не опубликовано" || bad "ничего не опубликовано"
+
+case_ "C11" "Папка после автоудаления — успех, а не ошибка"
+D="$SANDBOX/tC11"; mkdir -p "$D"
+make_zip "$D" "empty-after-repo" "1.0.0" dot
+DELETE_AFTER=1 run_deploy "$D" >/dev/null
+[ -z "$(ls -1 "$D"/*.zip 2>/dev/null)" ] && ok "архив удалён после публикации" || bad "архив удалён после публикации"
+OUT="$(run_deploy "$D" || true)"
+assert_contains "повторный прогон говорит спокойно" "$OUT" "Публиковать нечего"
+assert_missing "без слова ОШИБКА" "$OUT" "ОШИБКА"
+( cd "$D" && bash "$DEPLOY" "$D" >/dev/null 2>&1 ) \
+  && ok "и код возврата 0" || bad "и код возврата 0"
 
 # =============================================================================
 printf '\n\033[1m── Покрытие по зонам\033[0m\n'
