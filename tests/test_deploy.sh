@@ -817,9 +817,16 @@ assert_contains "описание всё равно по стандарту" \
   "$(cat "$GH_STORE/rel/noasset-repo/v1.0.0/title")" "noasset-repo v1.0.0 — Тезис"
 
 case_ "I4" "Ни одного тусклого/чёрного кода — фон у владельца тёмный"
-assert_missing "нет атрибута dim (2m)" "$(grep -oE '033\[2m' "$DEPLOY" | head -1)" "2m"
-assert_missing "нет чёрного (30m)" "$(grep -oE '033\[30m' "$DEPLOY" | head -1)" "30m"
-assert_missing "переменной C_DIM больше нет" "$(grep -c 'C_DIM' "$DEPLOY" | tr -d ' ')" "1"
+# Белый список: в скрипте допустимы ТОЛЬКО яркие коды и сброс.
+BADCODES="$(grep -oE '\\033\[[0-9;]*m' "$DEPLOY" | sort -u \
+  | grep -vE '\\033\[(0|97|1;97|91|92|93|95|96)m' | tr '\n' ' ')"
+assert_eq "нет ни одного тёмного/тусклого кода" "$(printf '%s' "$BADCODES" | tr -d ' ')" ""
+assert_eq "переменной C_DIM нет" "$(grep -c 'C_DIM' "$DEPLOY" | tr -d ' ')" "0"
+# каждая функция печати обязана нести свой код, а не полагаться на цвет терминала
+for f in red grn ylw cyn mag bld plain; do
+  grep -qE "^$f\(\)\{ printf '%s%s%s" "$DEPLOY" \
+    && ok "$f() печатает со своим цветом" || bad "$f() печатает со своим цветом"
+done
 D="$SANDBOX/tI4"; mkdir -p "$D"
 make_zip "$D" "color-repo" "1.0.0" dot
 OUT="$(NO_COLOR= run_deploy "$D" 2>&1)"

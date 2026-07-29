@@ -80,7 +80,7 @@ REMOTE_BASE="${REMOTE_BASE:-https://github.com/$OWNER}"   # переопреде
 MIN_FILES="${MIN_FILES:-5}"
 PRIVATE="${PRIVATE:-1}"
 ASSET="${ASSET:-1}"
-SCRIPT_VERSION="3.0.0"
+SCRIPT_VERSION="3.0.1"
 DRY="${DRY:-0}"
 AUDIT="${AUDIT:-0}"          # 1 = полная ревизия ВСЕХ релизов (долго)
 VERIFY="${VERIFY:-0}"        # 1 = только проверка «что можно удалять локально»
@@ -104,18 +104,21 @@ VARIANT_REPOS="${VARIANT_REPOS:-finpilot}"
 REPO_MAP="${REPO_MAP:-finpilot=personal-finance-dss}"
 
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
-  C_RED=$'\033[31m'; C_GRN=$'\033[32m'; C_YLW=$'\033[33m'; C_CYN=$'\033[36m'
-  C_MAG=$'\033[35m'; C_BLD=$'\033[1m'; C_OFF=$'\033[0m'
-  # ЦВЕТА: только яркие. Никакого dim и никакого чёрного — у владельца тёмный фон,
-  # тусклый текст на нём не виден вообще. Второстепенное = обычный цвет терминала.
+  # ТОЛЬКО ЯРКИЕ ЦВЕТА (91-97). Фон у владельца чёрный, поэтому запрещены:
+  #   30m  — чёрный,           90m — «яркий чёрный» (серый),
+  #   2m   — тусклый,          31-37m — тусклые варианты палитры,
+  #   голая жирность 1m и печать без кода — это цвет терминала по умолчанию,
+  #   он в тёмной теме тоже тёмный. Каждая строка обязана нести свой яркий код.
+  C_RED=$'\033[91m'; C_GRN=$'\033[92m'; C_YLW=$'\033[93m'; C_CYN=$'\033[96m'
+  C_MAG=$'\033[95m'; C_BLD=$'\033[1;97m'; C_TXT=$'\033[97m'; C_OFF=$'\033[0m'
 else
-  C_RED=""; C_GRN=""; C_YLW=""; C_CYN=""; C_MAG=""; C_BLD=""; C_OFF=""
+  C_RED=""; C_GRN=""; C_YLW=""; C_CYN=""; C_MAG=""; C_BLD=""; C_TXT=""; C_OFF=""
 fi
 red(){ printf '%s%s%s\n' "$C_RED" "$*" "$C_OFF"; }
 grn(){ printf '%s%s%s\n' "$C_GRN" "$*" "$C_OFF"; }
 ylw(){ printf '%s%s%s\n' "$C_YLW" "$*" "$C_OFF"; }
 cyn(){ printf '%s%s%s\n' "$C_CYN" "$*" "$C_OFF"; }
-plain(){ printf '%s\n' "$*"; }          # обычный цвет терминала, читается на любом фоне
+plain(){ printf '%s%s%s\n' "$C_TXT" "$*" "$C_OFF"; }   # ярко-белый, не цвет терминала
 mag(){ printf '%s%s%s\n' "$C_MAG" "$*" "$C_OFF"; }
 bld(){ printf '%s%s%s\n' "$C_BLD" "$*" "$C_OFF"; }
 # fail loud: то, что скрипт чинить НЕ станет — человек решает сам
