@@ -701,11 +701,11 @@ echo x > "$A/finpilot_v6.6.0_intl.zip"
 echo x > "$A/finpilot_v6_6_0_intl.zip"
 echo x > "$A/asset-repo-v5.0.0.zip"
 echo x > "$A/otchet.pdf"
-# без режима ревизии флаг вхолостую — скрипт обязан об этом сказать
-OUT="$(DROP_LEGACY_ASSETS=1 run_deploy "$D")"
-assert_contains "предупреждение о бесполезном флаге" "$OUT" "без режима ревизии"
+# в дефолтном режиме опубликованные релизы не обходятся — дубль на месте
+OUT="$(run_deploy "$D")"
 assert_contains "дубль пока на месте" "$(ls -1 "$A" | tr '\n' ' ')" "finpilot_v6_6_0_intl.zip"
-OUT="$(DROP_LEGACY_ASSETS=1 AUDIT=1 run_deploy "$D")"
+# ревизия приводит релиз к стандарту ЦЕЛИКОМ, включая лишние ассеты — без спецфлага
+OUT="$(AUDIT=1 run_deploy "$D")"
 LEFT="$(ls -1 "$A" | sort | tr '\n' ' ')"
 assert_missing "дубль с точками снят" "$LEFT" "finpilot_v6.6.0_intl.zip"
 assert_missing "дубль с подчёркиваниями снят" "$LEFT" "finpilot_v6_6_0_intl.zip"
@@ -723,9 +723,9 @@ echo x > "$A/legacy_v1.0.0_intl.zip"
 BEFORE="$(ls -1 "$A" | sort | tr '\n' ' ')"
 OUT="$(run_deploy "$D")"
 assert_eq "состав ассетов не изменился" "$(ls -1 "$A" | sort | tr '\n' ' ')" "$BEFORE"
-OUT="$(AUDIT=1 FORCE=1 run_deploy "$D")"
-assert_eq "даже при AUDIT+FORCE не изменился" "$(ls -1 "$A" | sort | tr '\n' ' ')" "$BEFORE"
-OUT="$(DRY=1 DROP_LEGACY_ASSETS=1 run_deploy "$D")"
+OUT="$(KEEP_LEGACY_ASSETS=1 AUDIT=1 FORCE=1 run_deploy "$D")"
+assert_eq "KEEP_LEGACY_ASSETS=1 сохраняет всё" "$(ls -1 "$A" | sort | tr '\n' ' ')" "$BEFORE"
+OUT="$(DRY=1 AUDIT=1 run_deploy "$D")"
 assert_eq "DRY ничего не удаляет" "$(ls -1 "$A" | sort | tr '\n' ' ')" "$BEFORE"
 
 case_ "F2" "Нет канонического ассета — чистка не запускается"
@@ -815,6 +815,20 @@ git clone -q "$REMOTES/noasset-repo.git" "$SANDBOX/c56" 2>/dev/null
 assert_eq "дерево и тег опубликованы" "$(tag_tree_version "$SANDBOX/c56" 1.0.0)" "1.0.0"
 assert_contains "описание всё равно по стандарту" \
   "$(cat "$GH_STORE/rel/noasset-repo/v1.0.0/title")" "noasset-repo v1.0.0 — Тезис"
+
+case_ "I4" "Ни одного тусклого/чёрного кода — фон у владельца тёмный"
+assert_missing "нет атрибута dim (2m)" "$(grep -oE '033\[2m' "$DEPLOY" | head -1)" "2m"
+assert_missing "нет чёрного (30m)" "$(grep -oE '033\[30m' "$DEPLOY" | head -1)" "30m"
+assert_missing "переменной C_DIM больше нет" "$(grep -c 'C_DIM' "$DEPLOY" | tr -d ' ')" "1"
+D="$SANDBOX/tI4"; mkdir -p "$D"
+make_zip "$D" "color-repo" "1.0.0" dot
+OUT="$(NO_COLOR= run_deploy "$D" 2>&1)"
+printf '%s' "$OUT" | grep -q "$(printf '\033')\[2m" && bad "в выводе нет dim" || ok "в выводе нет dim"
+
+case_ "A7" "Подсказка про освобождение места печатается каждый прогон"
+OUT="$(run_deploy "$D")"
+assert_contains "сказано, как узнать про удаление" "$OUT" "VERIFY=1"
+assert_contains "объяснено зачем" "$OUT" "Освободить место"
 
 # =============================================================================
 printf '\n\033[1m── Покрытие по зонам\033[0m\n'

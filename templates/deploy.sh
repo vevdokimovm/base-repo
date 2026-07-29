@@ -80,12 +80,16 @@ REMOTE_BASE="${REMOTE_BASE:-https://github.com/$OWNER}"   # переопреде
 MIN_FILES="${MIN_FILES:-5}"
 PRIVATE="${PRIVATE:-1}"
 ASSET="${ASSET:-1}"
-SCRIPT_VERSION="2.2.0"
+SCRIPT_VERSION="3.0.0"
 DRY="${DRY:-0}"
 AUDIT="${AUDIT:-0}"          # 1 = полная ревизия ВСЕХ релизов (долго)
 VERIFY="${VERIFY:-0}"        # 1 = только проверка «что можно удалять локально»
 ALL_REPOS="${ALL_REPOS:-0}"  # 1 = взять ВСЕ репы из repos-map, а не только те, где есть архивы
-DROP_LEGACY_ASSETS="${DROP_LEGACY_ASSETS:-0}"  # 1 = удалять ассеты со старым неканоничным именем
+# Дубль под старым именем — нарушение §42 (ассетов должно быть ровно 3), поэтому
+# снимается при обычном приведении к стандарту. Это НЕ отдельный флаг: владелец не
+# обязан помнить спецкоманду, чтобы получить релиз по стандарту.
+KEEP_LEGACY_ASSETS="${KEEP_LEGACY_ASSETS:-0}"   # 1 = НЕ снимать дубли (страховка)
+DROP_LEGACY_ASSETS="${DROP_LEGACY_ASSETS:-1}"   # оставлен для совместимости
 GH_TIMEOUT="${GH_TIMEOUT:-120}"   # секунд на один вызов gh — чтобы не висеть
 REPAIR="${REPAIR:-0}"
 FORCE="${FORCE:-0}"
@@ -102,17 +106,16 @@ REPO_MAP="${REPO_MAP:-finpilot=personal-finance-dss}"
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
   C_RED=$'\033[31m'; C_GRN=$'\033[32m'; C_YLW=$'\033[33m'; C_CYN=$'\033[36m'
   C_MAG=$'\033[35m'; C_BLD=$'\033[1m'; C_OFF=$'\033[0m'
-  # Никакого dim/чёрного: \033[2m на тёмной теме сливается с фоном и текст не виден.
-  # Второстепенное печатаем обычным цветом терминала — читается на любой теме.
-  C_DIM=""; 
+  # ЦВЕТА: только яркие. Никакого dim и никакого чёрного — у владельца тёмный фон,
+  # тусклый текст на нём не виден вообще. Второстепенное = обычный цвет терминала.
 else
-  C_RED=""; C_GRN=""; C_YLW=""; C_CYN=""; C_MAG=""; C_BLD=""; C_DIM=""; C_OFF=""
+  C_RED=""; C_GRN=""; C_YLW=""; C_CYN=""; C_MAG=""; C_BLD=""; C_OFF=""
 fi
 red(){ printf '%s%s%s\n' "$C_RED" "$*" "$C_OFF"; }
 grn(){ printf '%s%s%s\n' "$C_GRN" "$*" "$C_OFF"; }
 ylw(){ printf '%s%s%s\n' "$C_YLW" "$*" "$C_OFF"; }
 cyn(){ printf '%s%s%s\n' "$C_CYN" "$*" "$C_OFF"; }
-dim(){ printf '%s%s%s\n' "$C_DIM" "$*" "$C_OFF"; }
+plain(){ printf '%s\n' "$*"; }          # обычный цвет терминала, читается на любом фоне
 mag(){ printf '%s%s%s\n' "$C_MAG" "$*" "$C_OFF"; }
 bld(){ printf '%s%s%s\n' "$C_BLD" "$*" "$C_OFF"; }
 # fail loud: то, что скрипт чинить НЕ станет — человек решает сам
@@ -284,7 +287,7 @@ build_notes(){
   # принимаем и готовый путь к файлу, и корень дерева
   if [ -f "$_clroot" ]; then _cl="$_clroot"; else _cl="$(find_changelog "$_clroot" "$_v" || true)"; fi
   if [ -n "$_cl" ] && [ -f "$_cl" ]; then
-    case "$_cl" in "$_clroot/CHANGELOG.md") : ;; *) dim "    CHANGELOG: ${_cl#$_clroot/}" >&2 ;; esac
+    case "$_cl" in "$_clroot/CHANGELOG.md") : ;; *) plain "    CHANGELOG: ${_cl#$_clroot/}" >&2 ;; esac
     _thesis="$(python3 "$PARSER" "$_cl" "$_v" "$_out" 2>"$WORK/parse_err.txt")"
     if [ $? -ne 0 ]; then
       ylw "    CHANGELOG: секции [$_v] нет — описание будет техническим" >&2
@@ -402,7 +405,7 @@ ensure_release(){
     # ВАЖНО: отдельным блоком ПОСЛЕ загрузки и только если канонический ассет
     # реально лежит на релизе. Иначе при сбое сети можно снести единственную копию
     # и не суметь положить замену.
-    if [ "$DROP_LEGACY_ASSETS" = "1" ]; then
+    if [ "$KEEP_LEGACY_ASSETS" != "1" ] && [ "$DROP_LEGACY_ASSETS" = "1" ]; then
       _now="$(gh_try release view "v$_v" --repo "$OWNER/$_r" --json assets --jq '.assets[].name' 2>/dev/null)"
       if printf '%s\n' "$_now" | grep -qx "$_aname"; then
         _vd="$(printf '%s' "$_v" | tr '.' '_')"
@@ -547,7 +550,7 @@ for z in "$DIR"/*.zip; do
   fi
   printf '%s\t%s\t%s\n' "$name" "$ver" "$z" >> "$INDEX"
 done
-[ "$N_SERVICE" -gt 0 ] && dim "  пропущено служебных архивов: $N_SERVICE (загрузки из чата, не наши артефакты)"
+[ "$N_SERVICE" -gt 0 ] && plain "  пропущено служебных архивов: $N_SERVICE (загрузки из чата, не наши артефакты)"
 if [ -n "$DUPES" ]; then
   echo ""; ylw "  рабочие копии и дубликаты — НЕ публикую (переименуй, если это поставка):"
   printf '%s\n' "$DUPES" | sed '/^$/d'
@@ -561,8 +564,8 @@ if [ -n "$MAPPED" ]; then
   printf '%s\n' "$MAPPED" | sed '/^$/d'
 fi
 if [ -n "$UNKNOWN" ]; then
-  echo ""; dim "  не версионные архивы — не трогаю (для полноты картины):"
-  printf '%s\n' "$UNKNOWN" | sed '/^$/d' | while IFS= read -r _u; do dim "$_u"; done
+  echo ""; plain "  не версионные архивы — не трогаю (для полноты картины):"
+  printf '%s\n' "$UNKNOWN" | sed '/^$/d' | while IFS= read -r _u; do plain "$_u"; done
 fi
 
 if [ ! -s "$INDEX" ]; then
@@ -614,11 +617,6 @@ if [ -n "$NONCANON" ]; then
   printf '%s\n' "$NONCANON" | sed '/^$/d'
 fi
 [ "$REPAIR" = "1" ] && cyn "  режим REPAIR: только приведение существующих релизов к стандарту"
-if [ "$DROP_LEGACY_ASSETS" = "1" ] && [ "$AUDIT" != "1" ] && [ "$REPAIR" != "1" ] && [ "$FORCE" != "1" ] && [ "$ALL_REPOS" != "1" ]; then
-  ylw "  ! DROP_LEGACY_ASSETS=1 без режима ревизии ничего не сделает:"
-  ylw "    уже опубликованные релизы в дефолтном режиме не обходятся."
-  ylw "    Добавь AUDIT=1 (или ALL_REPOS=1) — иначе флаг вхолостую."
-fi
 
 if [ "$DRY" = "1" ]; then
   ylw ""; ylw "DRY=1 — это только план, ничего не изменено. Убери DRY, чтобы выполнить."
@@ -778,7 +776,7 @@ while IFS= read -r REPO; do
       [ "$n_all" = "1" ] && [ "$n_dir" = "1" ] || break
       SRC="$SRC/$(ls -A "$SRC")"; _depth=$((_depth+1))
     done
-    [ "$_depth" -gt 0 ] && dim "  обёртка развёрнута (уровней: $_depth)"
+    [ "$_depth" -gt 0 ] && plain "  обёртка развёрнута (уровней: $_depth)"
 
     # маркеры корня — ДО любого деструктива
     if [ ! -f "$SRC/README.md" ]; then
@@ -909,7 +907,7 @@ if [ -n "$NEW_REPOS" ]; then
     if git clone -q --depth 1 "$REMOTE_BASE/base-repo.git" "$MAPCLONE" 2>/dev/null \
        && [ -f "$MAPCLONE/repos-map.md" ]; then
       MAP="$MAPCLONE"; MAP_AUTO=1
-      dim "  base-repo склонирована с GitHub для обновления карты"
+      plain "  base-repo склонирована с GitHub для обновления карты"
     fi
   fi
   if [ -n "$MAP" ]; then
@@ -973,6 +971,10 @@ if [ -n "$LOUD" ]; then
   echo ""; ylw "  Это не сбой прогона: остальное опубликовано. Разбери эти пункты руками."
 fi
 printf '%s\n' "$SUMMARY" > "$HOME/Downloads/deploy_last_run.log"
+# Владельцу не нужно помнить про режим — говорим сами, каждый раз.
+echo ""
+cyn "Освободить место: какие архивы уже полностью на GitHub и их можно удалить —"
+cyn "  VERIFY=1 zsh $0"
 echo ""; cyn "лог: ~/Downloads/deploy_last_run.log"
 
 rm -f "$INDEX" "$REPOLIST" "$PARSER"
