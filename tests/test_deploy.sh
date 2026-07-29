@@ -863,6 +863,28 @@ case_ "G8" "Команда удаления совместима с BSD xargs (m
 assert_missing "нет несуществующего на macOS -d" "$(grep 'safe_to_delete.txt' "$DEPLOY" | grep xargs)" "xargs -d"
 assert_contains "используется -0" "$(grep 'safe_to_delete.txt' "$DEPLOY" | grep xargs)" "xargs -0"
 
+case_ "G9" "Рабочая папка не остаётся на диске ни при каком выходе"
+D="$SANDBOX/tG9"; mkdir -p "$D"
+make_zip "$D" "tmp-clean-repo" "1.0.0" dot
+BEFORE_DL="$(ls -1 "$HOME/Downloads" 2>/dev/null | grep -c 'repo_deploy' || true)"
+run_deploy "$D" >/dev/null
+AFTER_DL="$(ls -1 "$HOME/Downloads" 2>/dev/null | grep -c 'repo_deploy' || true)"
+assert_eq "в Downloads не появилось рабочих папок" "$AFTER_DL" "$BEFORE_DL"
+LEFT="$(ls -d "${TMPDIR:-/tmp}"/repo_deploy_* 2>/dev/null | wc -l | tr -d ' ')"
+assert_eq "во временной папке не осталось мусора" "$LEFT" "0"
+# ранний выход (DRY) тоже обязан убирать за собой
+DRY=1 run_deploy "$D" >/dev/null
+LEFT="$(ls -d "${TMPDIR:-/tmp}"/repo_deploy_* 2>/dev/null | wc -l | tr -d ' ')"
+assert_eq "после DRY тоже чисто" "$LEFT" "0"
+# VERIFY — тоже ранний выход
+VERIFY=1 run_deploy "$D" >/dev/null 2>&1 || true
+LEFT="$(ls -d "${TMPDIR:-/tmp}"/repo_deploy_* 2>/dev/null | wc -l | tr -d ' ')"
+assert_eq "после VERIFY тоже чисто" "$LEFT" "0"
+# KEEP_WORK=1 — осознанная отладка, папка остаётся и названа
+OUT="$(KEEP_WORK=1 run_deploy "$D")"
+assert_contains "с KEEP_WORK=1 путь назван" "$OUT" "рабочая папка оставлена"
+rm -rf "${TMPDIR:-/tmp}"/repo_deploy_* 2>/dev/null || true
+
 # =============================================================================
 printf '\n\033[1m── Покрытие по зонам\033[0m\n'
 grp_name(){

@@ -107,6 +107,7 @@ VERIFY=1 zsh ~/Downloads/deploy.sh
 | `OWNER` | `vevdokimovm` | владелец репозиториев |
 | `PRIVATE` | `1` | новые репы создаются приватными |
 | `GH_TIMEOUT` | `120` | предел на один вызов `gh`, секунд |
+| `KEEP_WORK` | `0` | `1` — не удалять рабочую папку (отладка) |
 | `REPO_MAP` | `finpilot=personal-finance-dss` | архив едет в репу с другим именем |
 | `VARIANT_REPOS` | `finpilot` | у кого срезается постфикс сборки (`_intl`) |
 | `SERVICE_RE` | см. скрипт | что считать служебным архивом (`files*.zip`, `N.zip`) |

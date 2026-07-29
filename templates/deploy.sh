@@ -81,7 +81,7 @@ REMOTE_BASE="${REMOTE_BASE:-https://github.com/$OWNER}"   # переопреде
 MIN_FILES="${MIN_FILES:-5}"
 PRIVATE="${PRIVATE:-1}"
 ASSET="${ASSET:-1}"
-SCRIPT_VERSION="3.1.1"
+SCRIPT_VERSION="3.2.0"
 DRY="${DRY:-0}"
 AUDIT="${AUDIT:-0}"          # 1 = полная ревизия ВСЕХ релизов (долго)
 VERIFY="${VERIFY:-0}"        # 1 = только проверка «что можно удалять локально»
@@ -674,7 +674,24 @@ if [ "$VERIFY" = "1" ]; then
   rm -f "$INDEX" "$REPOLIST" "$PARSER"; exit 0
 fi
 
-WORK="$HOME/Downloads/repo_deploy_$(date +%Y%m%d_%H%M%S)"
+# Рабочая папка — во ВРЕМЕННОЙ директории, не в Downloads: сюда клонируются все репы,
+# и один прогон легко даёт несколько гигабайт. Раньше лежала в Downloads и оставалась
+# после каждого Ctrl+C — так и кончилось место на диске.
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/repo_deploy_XXXXXX")"
+# Уборка при ЛЮБОМ выходе: нормальном, по ошибке, по Ctrl+C. Раньше стояла последней
+# строкой скрипта, и до неё просто не доходило.
+cleanup_work(){
+  _rc=$?
+  if [ "${KEEP_WORK:-0}" = "1" ]; then
+    printf '%s\n' "рабочая папка оставлена: $WORK"
+  else
+    cd "$HOME" 2>/dev/null || cd /
+    rm -rf "$WORK" 2>/dev/null
+  fi
+  rm -f "${INDEX:-}" "${REPOLIST:-}" "${PARSER:-}" 2>/dev/null
+  exit "$_rc"
+}
+trap cleanup_work EXIT INT TERM
 mkdir -p "$WORK" || die "mkdir $WORK"
 NEW_REPOS=""
 
@@ -1007,5 +1024,4 @@ cyn "  VERIFY=1 zsh $0"
 echo ""; cyn "лог: ~/Downloads/deploy_last_run.log"
 
 rm -f "$INDEX" "$REPOLIST" "$PARSER"
-cd "$HOME" && rm -rf "$WORK"
 grn "✓ все репозитории обработаны"
