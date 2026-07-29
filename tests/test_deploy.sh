@@ -897,7 +897,8 @@ run_deploy "$D" >/dev/null
 D2="$SANDBOX/tG10b"; mkdir -p "$D2"
 make_zip "$D2" "del2-repo" "1.0.0" dot
 OUT="$(DELETE_AFTER=1 run_deploy "$D2")"
-assert_contains "удаление названо в выводе" "$OUT" "локальный архив удалён"
+assert_contains "есть блок автоудаления" "$OUT" "полностью на GitHub"
+assert_contains "имя удалённого названо" "$OUT" "del2-repo-v1.0.0.zip"
 [ ! -f "$D2/del2-repo-v1.0.0.zip" ] && ok "архив удалён после публикации" || bad "архив удалён после публикации"
 git clone -q "$REMOTES/del2-repo.git" "$SANDBOX/cG10" 2>/dev/null
 assert_eq "но версия на GitHub цела" "$(tag_tree_version "$SANDBOX/cG10" 1.0.0)" "1.0.0"
@@ -941,6 +942,24 @@ assert_contains "повторный прогон говорит спокойно
 assert_missing "без слова ОШИБКА" "$OUT" "ОШИБКА"
 ( cd "$D" && bash "$DEPLOY" "$D" >/dev/null 2>&1 ) \
   && ok "и код возврата 0" || bad "и код возврата 0"
+
+case_ "G12" "DELETE_AFTER удаляет и то, что опубликовано прошлым прогоном"
+D="$SANDBOX/tG12"; mkdir -p "$D"
+make_zip "$D" "prev-repo" "1.0.0" dot
+run_deploy "$D" >/dev/null                       # публикуем БЕЗ флага
+[ -f "$D/prev-repo-v1.0.0.zip" ] && ok "после публикации архив на месте" || bad "после публикации архив на месте"
+OUT="$(DELETE_AFTER=1 run_deploy "$D")"          # флаг в СЛЕДУЮЩЕМ прогоне
+assert_contains "версия уже была опубликована" "$OUT" "тег есть, пропускаю"
+[ ! -f "$D/prev-repo-v1.0.0.zip" ] && ok "архив всё равно удалён" || bad "архив всё равно удалён"
+# а неопубликованный — остаётся, с указанием причины
+D2="$SANDBOX/tG12b"; mkdir -p "$D2"
+make_zip "$D2" "hold-repo" "1.0.0" dot
+tmp="$(mktemp -d)"; ( cd "$tmp" && unzip -qo "$D2/hold-repo-v1.0.0.zip" )
+printf '# CHANGELOG\n\nСекций нет.\n' > "$tmp/hold-repo-v1.0.0/CHANGELOG.md"
+rm "$D2/hold-repo-v1.0.0.zip"; ( cd "$tmp" && zip -qr "$D2/hold-repo-v1.0.0.zip" . ); rm -rf "$tmp"
+OUT="$(DELETE_AFTER=1 run_deploy "$D2")"
+[ -f "$D2/hold-repo-v1.0.0.zip" ] && ok "без релиза архив оставлен" || bad "без релиза архив оставлен"
+assert_contains "причина названа" "$OUT" "не хватает"
 
 # =============================================================================
 printf '\n\033[1m── Покрытие по зонам\033[0m\n'

@@ -81,7 +81,7 @@ REMOTE_BASE="${REMOTE_BASE:-https://github.com/$OWNER}"   # переопреде
 MIN_FILES="${MIN_FILES:-5}"
 PRIVATE="${PRIVATE:-1}"
 ASSET="${ASSET:-1}"
-SCRIPT_VERSION="3.3.1"
+SCRIPT_VERSION="3.4.0"
 DRY="${DRY:-0}"
 AUDIT="${AUDIT:-0}"          # 1 = полная ревизия ВСЕХ релизов (долго)
 VERIFY="${VERIFY:-0}"        # 1 = только проверка «что можно удалять локально»
@@ -256,6 +256,23 @@ release_state(){
     *"i/o timeout"*|*"502"*|*"503"*|*"504"*) return 2 ;;
   esac
   return 1
+}
+
+# Полностью ли версия опубликована: тег на remote + релиз + канонический ассет.
+# Одна функция на VERIFY и на DELETE_AFTER — иначе они разъедутся.
+# Печатает список недостающего; пусто = всё на месте.
+missing_parts(){
+  _mr="$1"; _mv="$2"; _miss=""
+  git ls-remote --tags "$REMOTE_BASE/$_mr.git" "refs/tags/v$_mv" 2>/dev/null | grep -q . \
+    || _miss="$_miss тег"
+  release_state "$_mr" "$_mv"; _ms=$?
+  if [ "$_ms" -ne 0 ]; then
+    _miss="$_miss релиз"
+  else
+    gh_try release view "v$_mv" --repo "$OWNER/$_mr" --json assets --jq '.assets[].name' 2>/dev/null \
+      | grep -Fxq "$_mr-v$_mv.zip" || _miss="$_miss ассет"
+  fi
+  printf '%s' "$_miss"
 }
 
 # --- поиск CHANGELOG где угодно в дереве ----------------------------------------
@@ -677,14 +694,7 @@ if [ "$VERIFY" = "1" ]; then
   SAFE=""; KEEP=""
   while IFS="$(printf '\t')" read -r r v z; do
     [ -n "$r" ] || continue
-    _miss=""
-    git ls-remote --tags "$REMOTE_BASE/$r.git" "refs/tags/v$v" 2>/dev/null | grep -q . || _miss="$_miss тег"
-    release_state "$r" "$v"; _s=$?
-    [ "$_s" -eq 0 ] || _miss="$_miss релиз"
-    if [ "$_s" -eq 0 ]; then
-      gh_try release view "v$v" --repo "$OWNER/$r" --json assets --jq '.assets[].name' 2>/dev/null \
-        | grep -qx "$r-v$v.zip" || _miss="$_miss ассет"
-    fi
+    _miss="$(missing_parts "$r" "$v")"
     if [ -z "$_miss" ]; then
       grn "  ✓ $(basename "$z") — на GitHub есть всё, можно удалять"
       SAFE="$SAFE
@@ -959,17 +969,6 @@ while IFS= read -r REPO; do
         [ -s "$NOTES_DIR/v$V.md" ] || { NOREL="$NOREL v$V"; continue; }
         [ -n "$TITLE" ] || TITLE="$REPO v$V"
         ensure_release "$REPO" "$V" "$NOTES_DIR/v$V.md" "$TITLE" "$Z" "$CLONE"
-        # Удаляем локальный архив ТОЛЬКО после того, как подтверждены все три вещи:
-        # тег на remote, релиз и канонический ассет совпадающего размера.
-        if [ "$DELETE_AFTER" = "1" ] && [ -n "$Z" ] && [ -f "$Z" ]; then
-          case " $ASSET_OK " in *" $V "*)
-            if git ls-remote --tags "$URL" "refs/tags/v$V" 2>/dev/null | grep -q . \
-               && release_state "$REPO" "$V"; then
-              rm -f "$Z" && { ylw "    − локальный архив удалён: $(basename "$Z")"
-                              note "$REPO|v$V|архив|удалён локально"; }
-            fi ;;
-          esac
-        fi
       else
         # Существующий релиз проверяется ВСЕГДА: сверка с CHANGELOG, заголовок, ассет.
         # Ничего не ломаем — правится только то, что расходится со стандартом.
@@ -1072,11 +1071,36 @@ if [ -n "$LOUD" ]; then
   printf '%s\n' "$LOUD" | sed '/^$/d'
   echo ""; ylw "  Это не сбой прогона: остальное опубликовано. Разбери эти пункты руками."
 fi
+# --- ШАГ 3.5. Автоудаление опубликованных архивов --------------------------------
+# Отдельным проходом по ВСЕМ архивам папки, а не только по опубликованным в этом
+# прогоне: архив мог уехать на GitHub раньше, и его всё равно надо убрать с диска.
+if [ "$DELETE_AFTER" = "1" ] && [ "$HAVE_GH" -eq 1 ]; then
+  echo ""; bld "── Удаляю архивы, которые полностью на GitHub"
+  _del=0; _kept=""
+  while IFS="$(printf '\t')" read -r r v z; do
+    [ -n "$r" ] && [ -f "$z" ] || continue
+    _m="$(missing_parts "$r" "$v")"
+    if [ -z "$_m" ]; then
+      rm -f "$z" && { grn "  − $(basename "$z")"; note "$r|v$v|архив|удалён локально"; _del=$((_del+1)); }
+    else
+      _kept="$_kept
+  $(basename "$z") — не хватает:$_m"
+    fi
+  done < "$INDEX"
+  [ "$_del" -gt 0 ] && grn "  удалено архивов: $_del" || plain "  удалять нечего"
+  if [ -n "$_kept" ]; then
+    echo ""; ylw "  оставлены (на GitHub не всё):"
+    printf '%s\n' "$_kept" | sed '/^$/d'
+  fi
+fi
+
 printf '%s\n' "$SUMMARY" > "$HOME/Downloads/deploy_last_run.log"
 # Владельцу не нужно помнить про режим — говорим сами, каждый раз.
 echo ""
+if [ "$DELETE_AFTER" != "1" ]; then
 cyn "Освободить место: какие архивы уже полностью на GitHub и их можно удалить —"
 cyn "  VERIFY=1 zsh $0"
+fi
 echo ""; cyn "лог: ~/Downloads/deploy_last_run.log"
 
 rm -f "$INDEX" "$REPOLIST" "$PARSER"
