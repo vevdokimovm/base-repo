@@ -43,7 +43,7 @@ release)
   d="$STORE/rel/$name/$tag"
   case "$sub" in
   view)
-    [ -d "$d" ] || exit 1
+    [ -d "$d" ] || { echo "release not found"; exit 1; }
     for a in "$@"; do
       case "$a" in
       body)   cat "$d/body"  2>/dev/null; exit 0 ;;

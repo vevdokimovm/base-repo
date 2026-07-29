@@ -202,7 +202,7 @@ assert_missing "и об этом не шумит" "$OUT" "приведено к 
 # осмысленное, но РАСХОДЯЩЕЕСЯ с CHANGELOG — не трогаем, но говорим вслух
 printf 'Своё развёрнутое описание релиза, написанное руками, которое не совпадает с журналом и вполне осмысленно по содержанию.' \
   > "$GH_STORE/rel/alpha-repo/v1.0.0/body"
-OUT="$(run_deploy "$SANDBOX/t1")"
+OUT="$(AUDIT=1 run_deploy "$SANDBOX/t1")"
 assert_contains "расхождение названо" "$OUT" "отличается от CHANGELOG"
 assert_contains "текст сохранён" "$(cat "$GH_STORE/rel/alpha-repo/v1.0.0/body")" "написанное руками"
 OUT="$(FORCE=1 run_deploy "$SANDBOX/t1")"
@@ -601,7 +601,9 @@ printf 'Release 1.0.0' > "$GH_STORE/rel/old-repo/v1.0.0/body"
 rm -rf "$GH_STORE/rel/old-repo/v1.0.0/assets"; mkdir -p "$GH_STORE/rel/old-repo/v1.0.0/assets"
 printf 'old-repo v1.1.0' > "$GH_STORE/rel/old-repo/v1.1.0/title"
 rm -f "$D/old-repo-v1.0.0.zip"          # архива под рукой больше нет — только тег
-OUT="$(run_deploy "$D")"                 # БЕЗ REPAIR/FORCE — должно чиниться само
+OUT="$(run_deploy "$D")"                 # дефолт: старое НЕ трогаем
+assert_missing "по умолчанию старые релизы не трогаются" "$OUT" "v1.0.0: заголовок"
+OUT="$(AUDIT=1 run_deploy "$D")"         # ревизия — чинит всё
 assert_eq "заголовок восстановлен с тезисом" \
   "$(cat "$GH_STORE/rel/old-repo/v1.0.0/title")" "old-repo v1.0.0 — Тезис версии 1.0.0"
 assert_contains "тело восстановлено из CHANGELOG" \
@@ -611,9 +613,52 @@ assert_eq "ассет собран из тега" \
 assert_contains "источник ассета назван" "$OUT" "из: тег"
 assert_eq "заголовок соседней версии тоже починен" \
   "$(cat "$GH_STORE/rel/old-repo/v1.1.0/title")" "old-repo v1.1.0 — Тезис версии 1.1.0"
-OUT="$(run_deploy "$D")"
+OUT="$(AUDIT=1 run_deploy "$D")"
 assert_missing "повторный прогон не правит v1.0.0" "$OUT" "v1.0.0: заголовок и описание"
 assert_missing "повторный прогон не догружает ассет" "$OUT" "v1.0.0: ассет"
+
+case_ "45. FORCE не трогает описание, если секции в CHANGELOG нет"
+# norel-repo из кейса 43: тег есть, CHANGELOG без секций, релиза нет.
+# Заводим релиз руками — имитация легаси-релиза, у которого нет источника описания.
+mkdir -p "$GH_STORE/rel/norel-repo/v1.0.0/assets"
+printf 'norel-repo v1.0.0' > "$GH_STORE/rel/norel-repo/v1.0.0/title"
+printf 'Осмысленное легаси-описание, написанное руками много месяцев назад.' \
+  > "$GH_STORE/rel/norel-repo/v1.0.0/body"
+GOOD="$(cat "$GH_STORE/rel/norel-repo/v1.0.0/body")"
+OUT="$(FORCE=1 run_deploy "$SANDBOX/t43")"
+assert_contains "отсутствие секции названо" "$OUT" "нет секции"
+assert_missing "нет ложной ошибки обновления" "$OUT" "не удалось обновить"
+assert_eq "описание не затёрто пустым" "$(cat "$GH_STORE/rel/norel-repo/v1.0.0/body")" "$GOOD"
+assert_eq "заголовок тоже цел" "$(cat "$GH_STORE/rel/norel-repo/v1.0.0/title")" "norel-repo v1.0.0"
+
+case_ "46. Шапка секции нормализуется к канону [X.Y.Z]"
+D="$SANDBOX/t46"; mkdir -p "$D"
+make_zip "$D" "dial-repo" "3.3.2" dot
+tmp="$(mktemp -d)"; ( cd "$tmp" && unzip -qo "$D/dial-repo-v3.3.2.zip" )
+printf '# CHANGELOG\n\n## v3.3.2 — 2026-07-25 — Тезис без скобок\n\nОпорный абзац.\n\n### Added\n- x\n' \
+  > "$tmp/dial-repo-v3.3.2/CHANGELOG.md"
+rm "$D/dial-repo-v3.3.2.zip"; ( cd "$tmp" && zip -qr "$D/dial-repo-v3.3.2.zip" . ); rm -rf "$tmp"
+OUT="$(run_deploy "$D")"
+assert_contains "тело начинается с канона" "$(head -1 "$GH_STORE/rel/dial-repo/v3.3.2/body")" "## [3.3.2]"
+assert_eq "заголовок собран верно" \
+  "$(cat "$GH_STORE/rel/dial-repo/v3.3.2/title")" "dial-repo v3.3.2 — Тезис без скобок"
+
+case_ "47. Дефолт быстрый: аудит старых релизов не запускается"
+D="$SANDBOX/t47"; mkdir -p "$D"
+make_zip "$D" "fast-repo" "1.0.0" dot
+run_deploy "$D" >/dev/null
+printf 'fast-repo v1.0.0' > "$GH_STORE/rel/fast-repo/v1.0.0/title"
+make_zip "$D" "fast-repo" "1.1.0" dot
+tmp="$(mktemp -d)"; ( cd "$tmp" && unzip -qo "$D/fast-repo-v1.1.0.zip" )
+printf '# CHANGELOG\n\n## [1.1.0] — 2026-07-28 — Тезис версии 1.1.0 (MINOR)\n\nОпорный абзац.\n\n### Added\n- x\n\n## [1.0.0] — 2026-07-24 — Тезис версии 1.0.0 (MINOR)\n\nОпорный абзац.\n\n### Added\n- x\n' \
+  > "$tmp/fast-repo-v1.1.0/CHANGELOG.md"
+rm "$D/fast-repo-v1.1.0.zip"; ( cd "$tmp" && zip -qr "$D/fast-repo-v1.1.0.zip" . ); rm -rf "$tmp"
+OUT="$(run_deploy "$D")"
+assert_contains "новая версия опубликована" "$OUT" "v1.1.0"
+assert_eq "старый заголовок НЕ тронут" "$(cat "$GH_STORE/rel/fast-repo/v1.0.0/title")" "fast-repo v1.0.0"
+OUT="$(AUDIT=1 run_deploy "$D")"
+assert_eq "с AUDIT=1 починен" \
+  "$(cat "$GH_STORE/rel/fast-repo/v1.0.0/title")" "fast-repo v1.0.0 — Тезис версии 1.0.0"
 
 # =============================================================================
 printf '\n\033[1m── Итог\033[0m\n'

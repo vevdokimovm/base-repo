@@ -79,7 +79,11 @@ REMOTE_BASE="${REMOTE_BASE:-https://github.com/$OWNER}"   # переопреде
 MIN_FILES="${MIN_FILES:-5}"
 PRIVATE="${PRIVATE:-1}"
 ASSET="${ASSET:-1}"
+SCRIPT_VERSION="2.0.0"
 DRY="${DRY:-0}"
+AUDIT="${AUDIT:-0}"          # 1 = полная ревизия ВСЕХ релизов (долго)
+VERIFY="${VERIFY:-0}"        # 1 = только проверка «что можно удалять локально»
+GH_TIMEOUT="${GH_TIMEOUT:-120}"   # секунд на один вызов gh — чтобы не висеть
 REPAIR="${REPAIR:-0}"
 FORCE="${FORCE:-0}"
 ASSETS_ONLY="${ASSETS_ONLY:-0}"
@@ -175,7 +179,18 @@ thesis = re.sub(r"\s*\((MAJOR|MINOR|PATCH)\)\s*$", "", tail).strip()
 text = "\n".join(body).strip("\n")
 while text.startswith("---"):
     text = text.split("\n", 1)[1].lstrip("\n") if "\n" in text else ""
-out_path.write_text((heading + "\n\n" + text).strip() + "\n", encoding="utf-8")
+# Нормализуем шапку секции к канону §42: «## [X.Y.Z] — ДАТА — тезис (BUMP)».
+# Часть реп исторически пишет «## vX.Y.Z — ...» без скобок — тело релиза из-за
+# этого выглядело иначе, чем у остальных. Содержимое секции не трогаем.
+_d = re.search(r"\d{4}-\d{2}-\d{2}", heading)
+_h = "## [" + version + "]"
+if _d:
+    _h += " — " + _d.group(0)
+if thesis:
+    _h += " — " + thesis
+if bump:
+    _h += " (" + bump.group(1) + ")"
+out_path.write_text((_h + "\n\n" + text).strip() + "\n", encoding="utf-8")
 
 print(thesis)
 if not bump:
@@ -344,9 +359,92 @@ if [ "$DRY" = "1" ]; then
   rm -f "$INDEX" "$REPOLIST" "$PARSER"; exit 0
 fi
 
+# --- РЕЖИМ VERIFY: можно ли удалять локальные архивы -----------------------------
+# Архив считается безопасным к удалению, только если на GitHub есть ВСЁ:
+# тег, релиз и канонический ассет <repo>-vX.Y.Z.zip. Иначе — держать.
+if [ "$VERIFY" = "1" ]; then
+  echo ""; bld "── Проверка: что можно удалить локально"
+  [ "$HAVE_GH" -eq 1 ] || die "нужен gh, иначе проверить нечем"
+  SAFE=""; KEEP=""
+  while IFS="$(printf '\t')" read -r r v z; do
+    [ -n "$r" ] || continue
+    _miss=""
+    git ls-remote --tags "$REMOTE_BASE/$r.git" "refs/tags/v$v" 2>/dev/null | grep -q . || _miss="$_miss тег"
+    release_state "$r" "$v"; _s=$?
+    [ "$_s" -eq 0 ] || _miss="$_miss релиз"
+    if [ "$_s" -eq 0 ]; then
+      gh_try release view "v$v" --repo "$OWNER/$r" --json assets --jq '.assets[].name' 2>/dev/null \
+        | grep -qx "$r-v$v.zip" || _miss="$_miss ассет"
+    fi
+    if [ -z "$_miss" ]; then
+      grn "  ✓ $(basename "$z") — на GitHub есть всё, можно удалять"
+      SAFE="$SAFE
+  $z"
+    else
+      red "  ✗ $(basename "$z") — не хватает:$_miss — ДЕРЖАТЬ"
+      KEEP="$KEEP
+  $(basename "$z") —$_miss"
+    fi
+  done < "$INDEX"
+  echo ""
+  if [ -n "$KEEP" ]; then
+    bld "НЕ УДАЛЯТЬ:"; printf '%s\n' "$KEEP" | sed '/^$/d'
+    echo ""
+  fi
+  if [ -n "$SAFE" ]; then
+    printf '%s\n' "$SAFE" | sed '/^$/d' > "$HOME/Downloads/safe_to_delete.txt"
+    grn "Список безопасных к удалению: ~/Downloads/safe_to_delete.txt"
+    cyn "Удалить одной командой:"
+    echo "  xargs -d '\\n' rm -- < ~/Downloads/safe_to_delete.txt"
+  fi
+  ylw ""
+  ylw "Помни: после удаления единственная копия — GitHub (приватные репы)."
+  ylw "Прежде чем сносить всё, подумай про офлайн-бэкап хотя бы флагмана."
+  rm -f "$INDEX" "$REPOLIST" "$PARSER"; exit 0
+fi
+
 WORK="$HOME/Downloads/repo_deploy_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$WORK" || die "mkdir $WORK"
 NEW_REPOS=""
+
+# --- gh с таймаутом и ретраями --------------------------------------------------
+# Раньше вызовы шли голыми: одна просадка сети — и версия помечалась провальной,
+# а на зависшем соединении прогон мог стоять десятками минут.
+gh_try(){
+  _n=0
+  while :; do
+    if command -v timeout >/dev/null 2>&1; then
+      _o="$(timeout "$GH_TIMEOUT" gh "$@" 2>&1)"; _rc=$?
+    else
+      _o="$(gh "$@" 2>&1)"; _rc=$?
+    fi
+    [ "$_rc" -eq 0 ] && { printf '%s' "$_o"; return 0; }
+    # Ретраим ТОЛЬКО похожее на сбой связи. «Не найдено» и отказы прав —
+    # это ответ сервера, повтор их не изменит и только тормозит прогон.
+    case "$_rc:$_o" in
+      124:*|*timeout*|*"connection reset"*|*"could not resolve"*|*"TLS handshake"*|\
+      *"i/o timeout"*|*"EOF"*|*"502"*|*"503"*|*"504"*|*"rate limit"*|*"try again"*) : ;;
+      *) printf '%s' "$_o"; return "$_rc" ;;
+    esac
+    _n=$((_n+1))
+    [ "$_n" -ge 3 ] && { printf '%s' "$_o"; return "$_rc"; }
+    sleep $((_n * 5))
+  done
+}
+
+# Существует ли релиз. Отличает «нет релиза» (rc=1, ответ получен) от
+# «запрос не прошёл» (сеть/таймаут) — во втором случае возвращает 2 и версия
+# не считается отсутствующей. Раньше оба случая выглядели одинаково, и скрипт
+# пытался создать уже существующий релиз.
+release_state(){
+  _out="$(gh_try release view "v$2" --repo "$OWNER/$1" --json name 2>&1)"; _rc=$?
+  [ "$_rc" -eq 0 ] && return 0
+  case "$_out" in
+    *timeout*|*"connection reset"*|*"could not resolve"*|*"TLS handshake"*|\
+    *"i/o timeout"*|*"502"*|*"503"*|*"504"*) return 2 ;;
+  esac
+  return 1
+}
 
 # --- поиск CHANGELOG где угодно в дереве ----------------------------------------
 # Канон — корень репы (§46), но исторически файл живёт и в docs/, и в
@@ -430,14 +528,21 @@ ensure_release(){
 
   if gh release view "v$_v" --repo "$OWNER/$_r" >/dev/null 2>&1; then
     # ---- АУДИТ существующего релиза (идёт всегда, а не по флагу) ----------------
-    _ct="$(gh release view "v$_v" --repo "$OWNER/$_r" --json name --jq '.name' 2>/dev/null)"
-    _cb="$(gh release view "v$_v" --repo "$OWNER/$_r" --json body --jq '.body' 2>/dev/null)"
+    _ct="$(gh_try release view "v$_v" --repo "$OWNER/$_r" --json name --jq '.name' 2>/dev/null)"
+    _cb="$(gh_try release view "v$_v" --repo "$OWNER/$_r" --json body --jq '.body' 2>/dev/null)"
     _fixt=0; _fixb=0
     [ -n "$_t" ] || _t="$_ct"                       # нет эталона — сохраняем текущий
     # заголовок: чиним, если расходится с эталоном из CHANGELOG
     [ -n "$_t" ] && [ "$_ct" != "$_t" ] && _fixt=1
     # тело: чиним заглушки; осмысленное, но расходящееся — только с FORCE
-    if release_is_stub "$_r" "$_v"; then _fixb=1
+    # Тело правим ТОЛЬКО когда есть чем: пустой notes-файл (нет секции в CHANGELOG)
+    # уходил в `gh release edit --notes-file <пусто>` и валил версию. Это и была
+    # причина всех «не удалось обновить» в прогоне с FORCE.
+    if [ ! -s "$_n" ]; then
+      _fixb=0
+      ylw "    ~ v$_v: нет секции в CHANGELOG — описание не трогаю"
+      note "$_r|v$_v|описание|~ нет секции"
+    elif release_is_stub "$_r" "$_v"; then _fixb=1
     elif [ "$FORCE" = "1" ]; then _fixb=1
     elif [ -s "$_n" ] && [ -n "$_cb" ]; then
       if [ "$(printf '%s' "$_cb" | tr -d ' \n\r')" != "$(cat "$_n" | tr -d ' \n\r')" ]; then
@@ -449,11 +554,11 @@ ensure_release(){
       if [ "$_fixb" = "1" ]; then
         # пустой заголовок НИКОГДА не отправляем — затрёт существующий
         _targ=""; [ -n "$_t" ] && _targ="--title"
-        gh release edit "v$_v" --repo "$OWNER/$_r" ${_targ:+$_targ "$_t"} --notes-file "$_n" >/dev/null 2>&1 \
+        gh_try release edit "v$_v" --repo "$OWNER/$_r" ${_targ:+$_targ "$_t"} --notes-file "$_n" >/dev/null 2>&1 \
           && { grn "    ✓ v$_v: заголовок и описание по стандарту"; note "$_r|v$_v|релиз|починен"; } \
           || { red "    ✗ v$_v: не удалось обновить"; note "$_r|v$_v|релиз|✗ ошибка"; }
       else
-        gh release edit "v$_v" --repo "$OWNER/$_r" --title "$_t" >/dev/null 2>&1 \
+        gh_try release edit "v$_v" --repo "$OWNER/$_r" --title "$_t" >/dev/null 2>&1 \
           && { grn "    ✓ v$_v: заголовок → $_t"; note "$_r|v$_v|заголовок|починен"; } \
           || { red "    ✗ v$_v: заголовок не обновлён"; note "$_r|v$_v|заголовок|✗ ошибка"; }
       fi
@@ -461,19 +566,19 @@ ensure_release(){
   else
     if [ "$ASSET" = "1" ] && [ -n "$_z" ]; then
       cp "$_z" "$WORK/$_aname"
-      gh release create "v$_v" "$WORK/$_aname" --repo "$OWNER/$_r" --title "$_t" --notes-file "$_n" $_lat >/dev/null 2>&1 \
+      gh_try release create "v$_v" "$WORK/$_aname" --repo "$OWNER/$_r" --title "$_t" --notes-file "$_n" $_lat >/dev/null 2>&1 \
         && { grn "    ✓ релиз v$_v (+ассет $_aname)"; note "$_r|v$_v|релиз|создан"; } \
         || { red "    ✗ релиз v$_v не создан"; note "$_r|v$_v|релиз|✗ ошибка"; }
       rm -f "$WORK/$_aname"; return 0
     fi
-    gh release create "v$_v" --repo "$OWNER/$_r" --title "$_t" --notes-file "$_n" $_lat >/dev/null 2>&1 \
+    gh_try release create "v$_v" --repo "$OWNER/$_r" --title "$_t" --notes-file "$_n" $_lat >/dev/null 2>&1 \
       && { grn "    ✓ релиз v$_v"; note "$_r|v$_v|релиз|создан"; } \
       || { red "    ✗ релиз v$_v не создан"; note "$_r|v$_v|релиз|✗ ошибка"; }
   fi
 
   # ---- канонический ассет (§4: ровно 3 ассета) ---------------------------------
   if [ "$ASSET" = "1" ]; then
-    if ! gh release view "v$_v" --repo "$OWNER/$_r" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "$_aname"; then
+    if ! gh_try release view "v$_v" --repo "$OWNER/$_r" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "$_aname"; then
       _src=""
       if [ -n "$_z" ] && [ -f "$_z" ]; then
         cp "$_z" "$WORK/$_aname"; _src="архив"
@@ -483,7 +588,7 @@ ensure_release(){
         git -C "$_cl" archive --format=zip --prefix="$_r-v$_v/" "v$_v" -o "$WORK/$_aname" 2>/dev/null && _src="тег"
       fi
       if [ -n "$_src" ] && [ -f "$WORK/$_aname" ]; then
-        gh release upload "v$_v" "$WORK/$_aname" --repo "$OWNER/$_r" --clobber >/dev/null 2>&1 \
+        gh_try release upload "v$_v" "$WORK/$_aname" --repo "$OWNER/$_r" --clobber >/dev/null 2>&1 \
           && { grn "    ✓ v$_v: ассет $_aname догружен (из: $_src)"; note "$_r|v$_v|ассет|догружен ($_src)"; } \
           || { red "    ✗ v$_v: ассет не загрузился"; note "$_r|v$_v|ассет|✗ ошибка"; }
         rm -f "$WORK/$_aname"
@@ -663,16 +768,30 @@ while IFS= read -r REPO; do
   # --- 2D. Релизы: и на новые версии, и починка старых (главный прежний баг) -----
   if [ "$HAVE_GH" -eq 1 ]; then
     echo ""; ylw "→ релизы"
-    ALLTAGS="$(git tag -l 'v*' | sed 's/^v//' | sort -t. -k1,1n -k2,2n -k3,3n | tr '\n' ' ')"
+    # РЕЖИМЫ. По умолчанию трогаем только опубликованные в этом прогоне версии —
+    # быстро. Полная ревизия всех релизов репы — по AUDIT=1 (долго, но
+    # приводит к стандарту всю историю).
+    if [ "$AUDIT" = "1" ] || [ "$REPAIR" = "1" ] || [ "$FORCE" = "1" ]; then
+      ALLTAGS="$(git tag -l 'v*' | sed 's/^v//' | sort -t. -k1,1n -k2,2n -k3,3n | tr '\n' ' ')"
+    else
+      ALLTAGS="$PUBLISHED"
+    fi
     NOREL=""
     for V in $ALLTAGS; do
       Z="$(awk -F'\t' -v r="$REPO" -v v="$V" '$1==r && $2==v{print $3; exit}' "$INDEX")"
-      if ! gh release view "v$V" --repo "$OWNER/$REPO" >/dev/null 2>&1; then
-        if [ ! -s "$NOTES_DIR/v$V.md" ]; then
-          TITLE="$(build_notes "$CLONE" "$V" "$REPO" "$NOTES_DIR/v$V.md")" || { NOREL="$NOREL v$V"; continue; }
-        fi
+      release_state "$REPO" "$V"; _st=$?
+      if [ "$_st" -eq 2 ]; then
+        red "    ✗ v$V: GitHub недоступен — пропускаю (перезапусти позже)"
+        note "$REPO|v$V|релиз|✗ сеть"
+        continue
+      fi
+      if [ "$_st" -eq 1 ]; then
+        # TITLE считаем ЗАНОВО для каждой версии. Раньше он переиспользовался
+        # с прошлой итерации, если notes-файл уже был создан на этапе публикации,
+        # и младшая версия получала заголовок старшей.
+        TITLE="$(build_notes "$CLONE" "$V" "$REPO" "$NOTES_DIR/v$V.md")" || { NOREL="$NOREL v$V"; continue; }
         [ -s "$NOTES_DIR/v$V.md" ] || { NOREL="$NOREL v$V"; continue; }
-        [ -n "${TITLE:-}" ] || TITLE="$REPO v$V"
+        [ -n "$TITLE" ] || TITLE="$REPO v$V"
         ensure_release "$REPO" "$V" "$NOTES_DIR/v$V.md" "$TITLE" "$Z" "$CLONE"
       else
         # Существующий релиз проверяется ВСЕГДА: сверка с CHANGELOG, заголовок, ассет.
