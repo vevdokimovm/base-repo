@@ -25,6 +25,7 @@
 # push_base_repo.sh, fix_releases.sh). Каждая из них умела свой кусок; здесь собран
 # объединённый рабочий процесс + починка того, что прежние версии делали не по стандарту.
 # Разбор консолидации: reports/merges/scripts_consolidation_report.md
+# Все режимы и ключи: templates/deploy-MODES.md
 #
 # ЧТО ДЕЛАЕТ (полный цикл, идемпотентно):
 #   находит все версионные архивы в папке -> группирует по репам -> сортирует по SemVer
@@ -100,7 +101,10 @@ REPO_MAP="${REPO_MAP:-finpilot=personal-finance-dss}"
 
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
   C_RED=$'\033[31m'; C_GRN=$'\033[32m'; C_YLW=$'\033[33m'; C_CYN=$'\033[36m'
-  C_MAG=$'\033[35m'; C_BLD=$'\033[1m'; C_DIM=$'\033[2m'; C_OFF=$'\033[0m'
+  C_MAG=$'\033[35m'; C_BLD=$'\033[1m'; C_OFF=$'\033[0m'
+  # Никакого dim/чёрного: \033[2m на тёмной теме сливается с фоном и текст не виден.
+  # Второстепенное печатаем обычным цветом терминала — читается на любой теме.
+  C_DIM=""; 
 else
   C_RED=""; C_GRN=""; C_YLW=""; C_CYN=""; C_MAG=""; C_BLD=""; C_DIM=""; C_OFF=""
 fi
@@ -624,9 +628,17 @@ ensure_release(){
             | while IFS= read -r _old; do
                 [ -n "$_old" ] || continue
                 [ "$_old" = "$_aname" ] && continue
-                case "$_old" in *.zip)
-                  gh_try release delete-asset "v$_v" "$_old" --repo "$OWNER/$_r" --yes >/dev/null 2>&1 \
-                    && ylw "    − v$_v: снят легаси-ассет $_old";;
+                # Сносим ТОЛЬКО архив той же версии под старым именем — это дубль
+                # канонического. Любые другие вложения не трогаем: там могут быть
+                # осмысленные файлы, а удаление ассета необратимо.
+                _vd="$(printf '%s' "$_v" | tr '.' '_')"
+                case "$_old" in
+                  *.zip)
+                    case "$_old" in
+                      *"$_v"*|*"$_vd"*)
+                        gh_try release delete-asset "v$_v" "$_old" --repo "$OWNER/$_r" --yes >/dev/null 2>&1 \
+                          && ylw "    − v$_v: снят дубль под старым именем — $_old" ;;
+                    esac ;;
                 esac
               done
         fi
