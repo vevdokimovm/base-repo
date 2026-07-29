@@ -48,7 +48,11 @@ release)
       case "$a" in
       body)   cat "$d/body"  2>/dev/null; exit 0 ;;
       name)   cat "$d/title" 2>/dev/null; exit 0 ;;
-      assets) ls -1 "$d/assets" 2>/dev/null; exit 0 ;;
+      assets)
+        for a in "$d/assets"/*; do [ -f "$a" ] || continue
+          case "$*" in *size*) wc -c < "$a" | tr -d ' ' ;; *) basename "$a" ;; esac
+        done
+        exit 0 ;;
       esac
     done
     exit 0 ;;

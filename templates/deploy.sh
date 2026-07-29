@@ -81,7 +81,7 @@ REMOTE_BASE="${REMOTE_BASE:-https://github.com/$OWNER}"   # переопреде
 MIN_FILES="${MIN_FILES:-5}"
 PRIVATE="${PRIVATE:-1}"
 ASSET="${ASSET:-1}"
-SCRIPT_VERSION="3.2.0"
+SCRIPT_VERSION="3.3.0"
 DRY="${DRY:-0}"
 AUDIT="${AUDIT:-0}"          # 1 = полная ревизия ВСЕХ релизов (долго)
 VERIFY="${VERIFY:-0}"        # 1 = только проверка «что можно удалять локально»
@@ -89,6 +89,8 @@ ALL_REPOS="${ALL_REPOS:-0}"  # 1 = взять ВСЕ репы из repos-map, а
 # Дубль под старым именем — нарушение §42 (ассетов должно быть ровно 3), поэтому
 # снимается при обычном приведении к стандарту. Это НЕ отдельный флаг: владелец не
 # обязан помнить спецкоманду, чтобы получить релиз по стандарту.
+DELETE_AFTER="${DELETE_AFTER:-0}"   # 1 = удалять архив сразу после подтверждённой публикации
+MIN_FREE_MB="${MIN_FREE_MB:-2048}"  # ниже этого порога свободного места прогон не начинается
 KEEP_LEGACY_ASSETS="${KEEP_LEGACY_ASSETS:-0}"   # 1 = НЕ снимать дубли (страховка)
 DROP_LEGACY_ASSETS="${DROP_LEGACY_ASSETS:-1}"   # оставлен для совместимости
 GH_TIMEOUT="${GH_TIMEOUT:-120}"   # секунд на один вызов gh — чтобы не висеть
@@ -376,7 +378,10 @@ ensure_release(){
     if [ "$ASSET" = "1" ] && [ -n "$_z" ]; then
       cp "$_z" "$WORK/$_aname"
       gh_try release create "v$_v" "$WORK/$_aname" --repo "$OWNER/$_r" --title "$_t" --notes-file "$_n" $_lat >/dev/null 2>&1 \
-        && { grn "    ✓ релиз v$_v (+ассет $_aname)"; note "$_r|v$_v|релиз|создан"; } \
+        && { grn "    ✓ релиз v$_v (+ассет $_aname)"; note "$_r|v$_v|релиз|создан"
+             # помечаем ассет подтверждённым: иначе автоудаление архива не сработает
+             # для только что созданных релизов (эта ветка выходит из функции раньше)
+             ASSET_OK="$ASSET_OK $_v"; } \
         || { red "    ✗ релиз v$_v не создан"; note "$_r|v$_v|релиз|✗ ошибка"; }
       rm -f "$WORK/$_aname"; return 0
     fi
@@ -391,16 +396,36 @@ ensure_release(){
     if ! printf '%s\n' "$_have" | grep -Fxq "$_aname"; then
       _src=""
       if [ -n "$_z" ] && [ -f "$_z" ]; then
-        cp "$_z" "$WORK/$_aname"; _src="архив"
+        # cp без проверки уже привёл к заливке недокопированного файла при полном диске
+        if cp "$_z" "$WORK/$_aname" 2>/dev/null; then _src="архив"; else
+          red "    ✗ v$_v: не удалось скопировать архив (место на диске?) — ассет не трогаю"
+          note "$_r|v$_v|ассет|✗ копирование"; _src=""
+        fi
       elif [ -n "$_cl" ] && git -C "$_cl" rev-parse "v$_v" >/dev/null 2>&1; then
         # Архива под рукой нет (старая версия) — собираем канонический zip из тега.
         # Содержимое то же дерево, обёртка по §43.
         git -C "$_cl" archive --format=zip --prefix="$_r-v$_v/" "v$_v" -o "$WORK/$_aname" 2>/dev/null && _src="тег"
       fi
       if [ -n "$_src" ] && [ -f "$WORK/$_aname" ]; then
-        gh_try release upload "v$_v" "$WORK/$_aname" --repo "$OWNER/$_r" --clobber >/dev/null 2>&1 \
-          && { grn "    ✓ v$_v: ассет $_aname догружен (из: $_src)"; note "$_r|v$_v|ассет|догружен ($_src)"; } \
-          || { red "    ✗ v$_v: ассет не загрузился"; note "$_r|v$_v|ассет|✗ ошибка"; }
+        _lsz="$(wc -c < "$WORK/$_aname" | tr -d ' ')"
+        if gh_try release upload "v$_v" "$WORK/$_aname" --repo "$OWNER/$_r" --clobber >/dev/null 2>&1; then
+          # Сверяем РАЗМЕР на GitHub с локальным: обрыв связи или нехватка места
+          # дают частичный файл, который выглядит как успешная загрузка.
+          _rsz="$(gh_try release view "v$_v" --repo "$OWNER/$_r" --json assets \
+                  --jq ".assets[] | select(.name==\"$_aname\") | .size" 2>/dev/null | head -1)"
+          # Сверяем, только если размер пришёл числом. Не смогли узнать — не выдумываем
+          # отказ: ложная тревога хуже отсутствия проверки.
+          case "$_rsz" in ''|*[!0-9]*) _rsz="" ;; esac
+          if [ -n "$_rsz" ] && [ "$_rsz" != "$_lsz" ]; then
+            red "    ✗ v$_v: ассет залился частично ($_rsz из $_lsz байт) — перезапусти"
+            note "$_r|v$_v|ассет|✗ размер не сошёлся"
+          else
+            grn "    ✓ v$_v: ассет $_aname догружен (из: $_src)"; note "$_r|v$_v|ассет|догружен ($_src)"
+            ASSET_OK="$ASSET_OK $_v"
+          fi
+        else
+          red "    ✗ v$_v: ассет не загрузился"; note "$_r|v$_v|ассет|✗ ошибка"
+        fi
         rm -f "$WORK/$_aname"
       fi
     fi
@@ -441,6 +466,12 @@ ensure_release(){
 
 
 # --- ШАГ 1. Инвентаризация архивов ----------------------------------------------
+_free_mb="$(df -Pm "${TMPDIR:-/tmp}" 2>/dev/null | awk 'NR==2{print $4}')"
+if [ -n "$_free_mb" ] && [ "$_free_mb" -lt "$MIN_FREE_MB" ]; then
+  die "свободно всего ${_free_mb} МБ (нужно ≥ ${MIN_FREE_MB}). Освободи место: прогон на
+     переполненном диске обрывает копирование и может залить недокачанный ассет.
+     Порог меняется через MIN_FREE_MB."
+fi
 bld "── deploy.sh v$SCRIPT_VERSION · Шаг 1. Ищу версионные архивы в $DIR"
 INDEX="$(mktemp)"
 NONCANON=""; DUPES=""; VARIANTS=""; MAPPED=""; UNKNOWN=""; N_SERVICE=0
@@ -665,8 +696,12 @@ if [ "$VERIFY" = "1" ]; then
     printf '%s\n' "$SAFE" | sed '/^$/d; s/^[[:space:]]*//' > "$HOME/Downloads/safe_to_delete.txt"
     grn "Список безопасных к удалению: ~/Downloads/safe_to_delete.txt"
     cyn "Удалить одной командой:"
-    # BSD xargs (macOS) не знает -d — печатаем переносимый вариант
-    echo "  tr '\\n' '\\0' < ~/Downloads/safe_to_delete.txt | xargs -0 rm --"
+    # Ни xargs -d (нет в BSD), ни tr '\\0' (BSD хочет \\000) не переносимы.
+    # while-read работает везде и корректно обрабатывает пробелы в путях.
+    echo "  while IFS= read -r f; do rm -- \"\$f\"; done < ~/Downloads/safe_to_delete.txt"
+    echo ""
+    cyn "Либо один раз включи автоудаление, и список больше не понадобится:"
+    echo "  DELETE_AFTER=1 zsh $0"
   fi
   ylw ""
   ylw "Помни: после удаления единственная копия — GitHub (приватные репы)."
@@ -897,7 +932,7 @@ while IFS= read -r REPO; do
     else
       ALLTAGS="$PUBLISHED"
     fi
-    NOREL=""
+    NOREL=""; ASSET_OK=""
     for V in $ALLTAGS; do
       Z="$(awk -F'\t' -v r="$REPO" -v v="$V" '$1==r && $2==v{print $3; exit}' "$INDEX")"
       release_state "$REPO" "$V"; _st=$?
@@ -914,6 +949,17 @@ while IFS= read -r REPO; do
         [ -s "$NOTES_DIR/v$V.md" ] || { NOREL="$NOREL v$V"; continue; }
         [ -n "$TITLE" ] || TITLE="$REPO v$V"
         ensure_release "$REPO" "$V" "$NOTES_DIR/v$V.md" "$TITLE" "$Z" "$CLONE"
+        # Удаляем локальный архив ТОЛЬКО после того, как подтверждены все три вещи:
+        # тег на remote, релиз и канонический ассет совпадающего размера.
+        if [ "$DELETE_AFTER" = "1" ] && [ -n "$Z" ] && [ -f "$Z" ]; then
+          case " $ASSET_OK " in *" $V "*)
+            if git ls-remote --tags "$URL" "refs/tags/v$V" 2>/dev/null | grep -q . \
+               && release_state "$REPO" "$V"; then
+              rm -f "$Z" && { ylw "    − локальный архив удалён: $(basename "$Z")"
+                              note "$REPO|v$V|архив|удалён локально"; }
+            fi ;;
+          esac
+        fi
       else
         # Существующий релиз проверяется ВСЕГДА: сверка с CHANGELOG, заголовок, ассет.
         # Ничего не ломаем — правится только то, что расходится со стандартом.

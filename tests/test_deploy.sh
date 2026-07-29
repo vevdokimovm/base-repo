@@ -860,8 +860,8 @@ assert_contains "в сообщении есть тезис" "$MSG" "Тезис �
 assert_missing "нет технического 'tree sync'" "$MSG" "tree sync"
 
 case_ "G8" "Команда удаления совместима с BSD xargs (macOS)"
-assert_missing "нет несуществующего на macOS -d" "$(grep 'safe_to_delete.txt' "$DEPLOY" | grep xargs)" "xargs -d"
-assert_contains "используется -0" "$(grep 'safe_to_delete.txt' "$DEPLOY" | grep xargs)" "xargs -0"
+# подробная проверка переносимости — в G11; здесь только запрет несуществующего в BSD
+assert_missing "нет xargs -d (нет в BSD)" "$(grep 'safe_to_delete.txt' "$DEPLOY")" "xargs -d"
 
 case_ "G9" "Рабочая папка не остаётся на диске ни при каком выходе"
 D="$SANDBOX/tG9"; mkdir -p "$D"
@@ -884,6 +884,48 @@ assert_eq "после VERIFY тоже чисто" "$LEFT" "0"
 OUT="$(KEEP_WORK=1 run_deploy "$D")"
 assert_contains "с KEEP_WORK=1 путь назван" "$OUT" "рабочая папка оставлена"
 rm -rf "${TMPDIR:-/tmp}"/repo_deploy_* 2>/dev/null || true
+
+case_ "G10" "DELETE_AFTER удаляет архив только при подтверждённой публикации"
+D="$SANDBOX/tG10"; mkdir -p "$D"
+make_zip "$D" "del-repo" "1.0.0" dot
+run_deploy "$D" >/dev/null
+[ -f "$D/del-repo-v1.0.0.zip" ] && ok "без флага архив на месте" || bad "без флага архив на месте"
+D2="$SANDBOX/tG10b"; mkdir -p "$D2"
+make_zip "$D2" "del2-repo" "1.0.0" dot
+OUT="$(DELETE_AFTER=1 run_deploy "$D2")"
+assert_contains "удаление названо в выводе" "$OUT" "локальный архив удалён"
+[ ! -f "$D2/del2-repo-v1.0.0.zip" ] && ok "архив удалён после публикации" || bad "архив удалён после публикации"
+git clone -q "$REMOTES/del2-repo.git" "$SANDBOX/cG10" 2>/dev/null
+assert_eq "но версия на GitHub цела" "$(tag_tree_version "$SANDBOX/cG10" 1.0.0)" "1.0.0"
+assert_eq "и ассет на месте" \
+  "$(ls -1 "$GH_STORE/rel/del2-repo/v1.0.0/assets")" "del2-repo-v1.0.0.zip"
+# версия без релиза (нет секции) — архив НЕ удаляем
+D3="$SANDBOX/tG10c"; mkdir -p "$D3"
+make_zip "$D3" "del3-repo" "1.0.0" dot
+tmp="$(mktemp -d)"; ( cd "$tmp" && unzip -qo "$D3/del3-repo-v1.0.0.zip" )
+printf '# CHANGELOG\n\nСекций нет.\n' > "$tmp/del3-repo-v1.0.0/CHANGELOG.md"
+rm "$D3/del3-repo-v1.0.0.zip"; ( cd "$tmp" && zip -qr "$D3/del3-repo-v1.0.0.zip" . ); rm -rf "$tmp"
+DELETE_AFTER=1 run_deploy "$D3" >/dev/null
+[ -f "$D3/del3-repo-v1.0.0.zip" ] && ok "без релиза архив НЕ удалён" || bad "без релиза архив НЕ удалён"
+
+case_ "G11" "Печатаемая команда удаления переносима и работает с пробелами"
+CMD="$(grep 'safe_to_delete.txt' "$DEPLOY" | grep -E 'rm --' | head -1)"
+assert_missing "нет xargs -d (нет в BSD)" "$CMD" "xargs -d"
+assert_missing "нет tr со слэш-ноль (BSD хочет 000)" "$CMD" "tr '"
+assert_contains "используется while-read" "$CMD" "while IFS= read -r"
+# и она действительно удаляет, включая имя с пробелом
+mkdir -p "$SANDBOX/dl" && : > "$SANDBOX/dl/a b.zip" && : > "$SANDBOX/dl/c.zip"
+printf '%s\n%s\n' "$SANDBOX/dl/a b.zip" "$SANDBOX/dl/c.zip" > "$SANDBOX/dl/list.txt"
+while IFS= read -r f; do rm -- "$f"; done < "$SANDBOX/dl/list.txt"
+assert_eq "оба файла удалены" "$(ls -1 "$SANDBOX/dl"/*.zip 2>/dev/null | wc -l | tr -d ' ')" "0"
+
+case_ "C10" "Прогон не стартует на переполненном диске"
+D="$SANDBOX/tC10"; mkdir -p "$D"
+make_zip "$D" "space-repo" "1.0.0" dot
+OUT="$(MIN_FREE_MB=99999999 run_deploy "$D" || true)"
+assert_contains "сказано про нехватку места" "$OUT" "свободно всего"
+assert_contains "объяснено, чем это грозит" "$OUT" "недокачанный ассет"
+[ ! -d "$REMOTES/space-repo.git" ] && ok "ничего не опубликовано" || bad "ничего не опубликовано"
 
 # =============================================================================
 printf '\n\033[1m── Покрытие по зонам\033[0m\n'

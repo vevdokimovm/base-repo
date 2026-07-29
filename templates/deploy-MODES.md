@@ -25,6 +25,9 @@ ALL_REPOS=1 zsh ~/Downloads/deploy.sh
 
 # 5. Что уже можно удалить с диска.
 VERIFY=1 zsh ~/Downloads/deploy.sh
+
+# 5б. Или не думать об этом вовсе: удалять архив сразу после публикации.
+DELETE_AFTER=1 zsh ~/Downloads/deploy.sh
 ```
 
 ---
@@ -108,6 +111,8 @@ VERIFY=1 zsh ~/Downloads/deploy.sh
 | `PRIVATE` | `1` | новые репы создаются приватными |
 | `GH_TIMEOUT` | `120` | предел на один вызов `gh`, секунд |
 | `KEEP_WORK` | `0` | `1` — не удалять рабочую папку (отладка) |
+| `DELETE_AFTER` | `0` | `1` — удалять локальный архив сразу после подтверждённой публикации |
+| `MIN_FREE_MB` | `2048` | ниже этого порога свободного места прогон не начинается |
 | `REPO_MAP` | `finpilot=personal-finance-dss` | архив едет в репу с другим именем |
 | `VARIANT_REPOS` | `finpilot` | у кого срезается постфикс сборки (`_intl`) |
 | `SERVICE_RE` | см. скрипт | что считать служебным архивом (`files*.zip`, `N.zip`) |
