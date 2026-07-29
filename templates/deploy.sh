@@ -80,7 +80,7 @@ REMOTE_BASE="${REMOTE_BASE:-https://github.com/$OWNER}"   # переопреде
 MIN_FILES="${MIN_FILES:-5}"
 PRIVATE="${PRIVATE:-1}"
 ASSET="${ASSET:-1}"
-SCRIPT_VERSION="2.0.0"
+SCRIPT_VERSION="2.2.0"
 DRY="${DRY:-0}"
 AUDIT="${AUDIT:-0}"          # 1 = полная ревизия ВСЕХ релизов (долго)
 VERIFY="${VERIFY:-0}"        # 1 = только проверка «что можно удалять локально»
@@ -205,8 +205,236 @@ if not thesis:
     print("NOTHESIS", file=sys.stderr)
 PYEOF
 
+# =============================================================================
+# ФУНКЦИИ. Объявлены ДО всех шагов: режимы вроде VERIFY выходят из скрипта
+# раньше, чем дошли бы до определений ниже по файлу — и падали с
+# «command not found». Все функции живут здесь и только здесь.
+# =============================================================================
+# --- gh с таймаутом и ретраями --------------------------------------------------
+# Раньше вызовы шли голыми: одна просадка сети — и версия помечалась провальной,
+# а на зависшем соединении прогон мог стоять десятками минут.
+gh_try(){
+  _n=0
+  while :; do
+    if command -v timeout >/dev/null 2>&1; then
+      _o="$(timeout "$GH_TIMEOUT" gh "$@" 2>&1)"; _rc=$?
+    else
+      _o="$(gh "$@" 2>&1)"; _rc=$?
+    fi
+    [ "$_rc" -eq 0 ] && { printf '%s' "$_o"; return 0; }
+    # Ретраим ТОЛЬКО похожее на сбой связи. «Не найдено» и отказы прав —
+    # это ответ сервера, повтор их не изменит и только тормозит прогон.
+    case "$_rc:$_o" in
+      124:*|*timeout*|*"connection reset"*|*"could not resolve"*|*"TLS handshake"*|\
+      *"i/o timeout"*|*"EOF"*|*"502"*|*"503"*|*"504"*|*"rate limit"*|*"try again"*) : ;;
+      *) printf '%s' "$_o"; return "$_rc" ;;
+    esac
+    _n=$((_n+1))
+    [ "$_n" -ge 3 ] && { printf '%s' "$_o"; return "$_rc"; }
+    sleep $((_n * 5))
+  done
+}
+
+# Существует ли релиз. Отличает «нет релиза» (rc=1, ответ получен) от
+# «запрос не прошёл» (сеть/таймаут) — во втором случае возвращает 2 и версия
+# не считается отсутствующей. Раньше оба случая выглядели одинаково, и скрипт
+# пытался создать уже существующий релиз.
+release_state(){
+  _out="$(gh_try release view "v$2" --repo "$OWNER/$1" --json name 2>&1)"; _rc=$?
+  [ "$_rc" -eq 0 ] && return 0
+  case "$_out" in
+    *timeout*|*"connection reset"*|*"could not resolve"*|*"TLS handshake"*|\
+    *"i/o timeout"*|*"502"*|*"503"*|*"504"*) return 2 ;;
+  esac
+  return 1
+}
+
+# --- поиск CHANGELOG где угодно в дереве ----------------------------------------
+# Канон — корень репы (§46), но исторически файл живёт и в docs/, и в
+# 00-infrastructure/, и глубже. Ищем везде и выбираем тот, где ЕСТЬ секция версии:
+# наличие секции — единственный надёжный признак «это наш журнал».
+# find_changelog <корень> <версия> -> путь или пусто
+find_changelog(){
+  _root="$1"; _fv="$2"
+  # 1) приоритетные места по порядку
+  for _c in "$_root/CHANGELOG.md" "$_root/docs/CHANGELOG.md" \
+            "$_root/00-infrastructure/CHANGELOG.md" "$_root/CHANGELOG" "$_root/Changelog.md"; do
+    [ -f "$_c" ] && LC_ALL=C grep -qE "^#+ *\\[?$_fv\\]?( |\$|—|-)" "$_c" 2>/dev/null && { printf '%s' "$_c"; return 0; }
+  done
+  # 2) поиск по всему дереву — сначала тот, где есть секция версии
+  _found="$(find "$_root" -maxdepth 4 -iname 'CHANGELOG*.md' \
+              ! -path '*/node_modules/*' ! -path '*/.git/*' ! -path '*/_archive/*' \
+              ! -iname '*TEMPLATE*' ! -iname '*repos-map*' 2>/dev/null)"
+  for _c in $_found; do
+    LC_ALL=C grep -qE "^#+ *\\[?$_fv\\]?( |\$|—|-)" "$_c" 2>/dev/null && { printf '%s' "$_c"; return 0; }
+  done
+  # 3) секции нет нигде — вернём хоть какой-то журнал (приоритет корню)
+  for _c in "$_root/CHANGELOG.md" "$_root/docs/CHANGELOG.md" "$_root/00-infrastructure/CHANGELOG.md"; do
+    [ -f "$_c" ] && { printf '%s' "$_c"; return 0; }
+  done
+  for _c in $_found; do [ -f "$_c" ] && { printf '%s' "$_c"; return 0; }; done
+  return 1
+}
+
+# --- вспомогательное: заголовок + описание релиза по стандарту -------------------
+# build_notes <корень-дерева> <ver> <repo> <out.md>  -> печатает заголовок релиза
+build_notes(){
+  _clroot="$1"; _v="$2"; _r="$3"; _out="$4"
+  _thesis=""
+  # принимаем и готовый путь к файлу, и корень дерева
+  if [ -f "$_clroot" ]; then _cl="$_clroot"; else _cl="$(find_changelog "$_clroot" "$_v" || true)"; fi
+  if [ -n "$_cl" ] && [ -f "$_cl" ]; then
+    case "$_cl" in "$_clroot/CHANGELOG.md") : ;; *) dim "    CHANGELOG: ${_cl#$_clroot/}" >&2 ;; esac
+    _thesis="$(python3 "$PARSER" "$_cl" "$_v" "$_out" 2>"$WORK/parse_err.txt")"
+    if [ $? -ne 0 ]; then
+      ylw "    CHANGELOG: секции [$_v] нет — описание будет техническим" >&2
+      note "$_r|v$_v|описание|⚠ нет секции в CHANGELOG"
+      _thesis=""
+    else
+      grep -q NOBUMP   "$WORK/parse_err.txt" 2>/dev/null && \
+        { ylw "    CHANGELOG: в заголовке нет (MAJOR/MINOR/PATCH) — §2 стандарта" >&2; note "$_r|v$_v|формат|⚠ нет BUMP-маркера"; }
+      grep -q NOTHESIS "$WORK/parse_err.txt" 2>/dev/null && \
+        { ylw "    CHANGELOG: в заголовке нет тезиса — §2 стандарта" >&2; note "$_r|v$_v|формат|⚠ нет тезиса"; }
+    fi
+  else
+    red "    ✗ CHANGELOG не найден нигде в дереве" >&2
+    note "$_r|v$_v|описание|✗ CHANGELOG не найден"
+    loud "$_r v$_v: CHANGELOG не найден — релиз без описания НЕ создаю"
+    printf '' > "$_out"; return 1
+  fi
+  if [ ! -s "$_out" ]; then
+    red "    ✗ в CHANGELOG нет секции [$_v] — релиз без описания не создаю" >&2
+    loud "$_r v$_v: в CHANGELOG нет секции — добавь её и перезапусти с REPAIR=1"
+    return 1
+  fi
+  if [ -n "$_thesis" ]; then printf '%s v%s — %s\n' "$_r" "$_v" "$_thesis"
+  else printf '%s v%s\n' "$_r" "$_v"; fi
+}
+
+# release_is_stub <repo> <ver> -> 0 если описание пустое/заглушка (можно перезаписать)
+release_is_stub(){
+  _body="$(gh release view "v$2" --repo "$OWNER/$1" --json body --jq '.body' 2>/dev/null)"
+  [ -z "$_body" ] && return 0
+  printf '%s' "$_body" | grep -qE '^(Release |Синхронизация дерева)' && return 0
+  [ "$(printf '%s' "$_body" | wc -c | tr -d ' ')" -lt 40 ] && return 0
+  return 1
+}
+
+# ensure_release <repo> <ver> <notes.md> <title> <zip|"">
+ensure_release(){
+  _r="$1"; _v="$2"; _n="$3"; _t="$4"; _z="${5:-}"; _cl="${6:-}"
+  [ "$HAVE_GH" -eq 1 ] || { ylw "    gh нет — релиз v$_v вручную"; return 0; }
+  _aname="$_r-v$_v.zip"
+  _top="$(git tag -l 'v*' 2>/dev/null | sed 's/^v//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)"
+  _lat="--latest=false"; [ -z "$_top" ] || [ "$_v" = "$_top" ] && _lat="--latest=true"
+
+  if gh release view "v$_v" --repo "$OWNER/$_r" >/dev/null 2>&1; then
+    # ---- АУДИТ существующего релиза (идёт всегда, а не по флагу) ----------------
+    _ct="$(gh_try release view "v$_v" --repo "$OWNER/$_r" --json name --jq '.name' 2>/dev/null)"
+    _cb="$(gh_try release view "v$_v" --repo "$OWNER/$_r" --json body --jq '.body' 2>/dev/null)"
+    _fixt=0; _fixb=0
+    [ -n "$_t" ] || _t="$_ct"                       # нет эталона — сохраняем текущий
+    # заголовок: чиним, если расходится с эталоном из CHANGELOG
+    [ -n "$_t" ] && [ "$_ct" != "$_t" ] && _fixt=1
+    # тело: чиним заглушки; осмысленное, но расходящееся — только с FORCE
+    # Тело правим ТОЛЬКО когда есть чем: пустой notes-файл (нет секции в CHANGELOG)
+    # уходил в `gh release edit --notes-file <пусто>` и валил версию. Это и была
+    # причина всех «не удалось обновить» в прогоне с FORCE.
+    if [ ! -s "$_n" ]; then
+      _fixb=0
+      ylw "    ~ v$_v: нет секции в CHANGELOG — описание не трогаю"
+      note "$_r|v$_v|описание|~ нет секции"
+    elif release_is_stub "$_r" "$_v"; then _fixb=1
+    elif [ "$FORCE" = "1" ]; then _fixb=1
+    elif [ -s "$_n" ] && [ -n "$_cb" ]; then
+      if [ "$(printf '%s' "$_cb" | tr -d ' \n\r')" != "$(cat "$_n" | tr -d ' \n\r')" ]; then
+        ylw "    ~ v$_v: описание отличается от CHANGELOG — не трогаю (FORCE=1 чтобы синхронизировать)"
+        note "$_r|v$_v|описание|~ расходится с CHANGELOG"
+      fi
+    fi
+    if [ "$_fixt" = "1" ] || [ "$_fixb" = "1" ]; then
+      if [ "$_fixb" = "1" ]; then
+        # пустой заголовок НИКОГДА не отправляем — затрёт существующий
+        _targ=""; [ -n "$_t" ] && _targ="--title"
+        gh_try release edit "v$_v" --repo "$OWNER/$_r" ${_targ:+$_targ "$_t"} --notes-file "$_n" >/dev/null 2>&1 \
+          && { grn "    ✓ v$_v: заголовок и описание по стандарту"; note "$_r|v$_v|релиз|починен"; } \
+          || { red "    ✗ v$_v: не удалось обновить"; note "$_r|v$_v|релиз|✗ ошибка"; }
+      else
+        gh_try release edit "v$_v" --repo "$OWNER/$_r" --title "$_t" >/dev/null 2>&1 \
+          && { grn "    ✓ v$_v: заголовок → $_t"; note "$_r|v$_v|заголовок|починен"; } \
+          || { red "    ✗ v$_v: заголовок не обновлён"; note "$_r|v$_v|заголовок|✗ ошибка"; }
+      fi
+    fi
+  else
+    if [ "$ASSET" = "1" ] && [ -n "$_z" ]; then
+      cp "$_z" "$WORK/$_aname"
+      gh_try release create "v$_v" "$WORK/$_aname" --repo "$OWNER/$_r" --title "$_t" --notes-file "$_n" $_lat >/dev/null 2>&1 \
+        && { grn "    ✓ релиз v$_v (+ассет $_aname)"; note "$_r|v$_v|релиз|создан"; } \
+        || { red "    ✗ релиз v$_v не создан"; note "$_r|v$_v|релиз|✗ ошибка"; }
+      rm -f "$WORK/$_aname"; return 0
+    fi
+    gh_try release create "v$_v" --repo "$OWNER/$_r" --title "$_t" --notes-file "$_n" $_lat >/dev/null 2>&1 \
+      && { grn "    ✓ релиз v$_v"; note "$_r|v$_v|релиз|создан"; } \
+      || { red "    ✗ релиз v$_v не создан"; note "$_r|v$_v|релиз|✗ ошибка"; }
+  fi
+
+  # ---- канонический ассет (§4: ровно 3 ассета) ---------------------------------
+  if [ "$ASSET" = "1" ]; then
+    _have="$(gh_try release view "v$_v" --repo "$OWNER/$_r" --json assets --jq '.assets[].name' 2>/dev/null)"
+    if ! printf '%s\n' "$_have" | grep -qx "$_aname"; then
+      _src=""
+      if [ -n "$_z" ] && [ -f "$_z" ]; then
+        cp "$_z" "$WORK/$_aname"; _src="архив"
+      elif [ -n "$_cl" ] && git -C "$_cl" rev-parse "v$_v" >/dev/null 2>&1; then
+        # Архива под рукой нет (старая версия) — собираем канонический zip из тега.
+        # Содержимое то же дерево, обёртка по §43.
+        git -C "$_cl" archive --format=zip --prefix="$_r-v$_v/" "v$_v" -o "$WORK/$_aname" 2>/dev/null && _src="тег"
+      fi
+      if [ -n "$_src" ] && [ -f "$WORK/$_aname" ]; then
+        gh_try release upload "v$_v" "$WORK/$_aname" --repo "$OWNER/$_r" --clobber >/dev/null 2>&1 \
+          && { grn "    ✓ v$_v: ассет $_aname догружен (из: $_src)"; note "$_r|v$_v|ассет|догружен ($_src)"; } \
+          || { red "    ✗ v$_v: ассет не загрузился"; note "$_r|v$_v|ассет|✗ ошибка"; }
+        rm -f "$WORK/$_aname"
+      fi
+    fi
+
+    # ---- чистка дублей под старым именем (необратимо, только по флагу) ---------
+    # ВАЖНО: отдельным блоком ПОСЛЕ загрузки и только если канонический ассет
+    # реально лежит на релизе. Иначе при сбое сети можно снести единственную копию
+    # и не суметь положить замену.
+    if [ "$DROP_LEGACY_ASSETS" = "1" ]; then
+      _now="$(gh_try release view "v$_v" --repo "$OWNER/$_r" --json assets --jq '.assets[].name' 2>/dev/null)"
+      if printf '%s\n' "$_now" | grep -qx "$_aname"; then
+        _vd="$(printf '%s' "$_v" | tr '.' '_')"
+        printf '%s\n' "$_now" | while IFS= read -r _old; do
+          [ -n "$_old" ] || continue
+          [ "$_old" = "$_aname" ] && continue
+          # Сносим ТОЛЬКО zip той же версии под старым именем — это дубль
+          # канонического. Всё остальное (pdf, отчёты, архивы других версий)
+          # не трогаем: удаление ассета необратимо.
+          case "$_old" in *.zip) : ;; *) continue ;; esac
+          case "$_old" in
+            *"$_v"*|*"$_vd"*)
+              if [ "$DRY" = "1" ]; then
+                ylw "    − v$_v: снял бы дубль $_old (DRY)"
+              else
+                gh_try release delete-asset "v$_v" "$_old" --repo "$OWNER/$_r" --yes >/dev/null 2>&1 \
+                  && { ylw "    − v$_v: снят дубль под старым именем — $_old"; note "$_r|v$_v|ассет|снят дубль $_old"; } \
+                  || { red "    ✗ v$_v: не удалось снять $_old"; note "$_r|v$_v|ассет|✗ снятие"; }
+              fi ;;
+          esac
+        done
+      else
+        ylw "    ~ v$_v: канонического ассета нет — чистку дублей пропускаю"
+      fi
+    fi
+  fi
+
+}
+
+
 # --- ШАГ 1. Инвентаризация архивов ----------------------------------------------
-bld "── Шаг 1. Ищу версионные архивы в $DIR"
+bld "── deploy.sh v$SCRIPT_VERSION · Шаг 1. Ищу версионные архивы в $DIR"
 INDEX="$(mktemp)"
 NONCANON=""; DUPES=""; VARIANTS=""; MAPPED=""; UNKNOWN=""; N_SERVICE=0
 for z in "$DIR"/*.zip; do
@@ -430,7 +658,9 @@ if [ "$VERIFY" = "1" ]; then
     echo ""
   fi
   if [ -n "$SAFE" ]; then
-    printf '%s\n' "$SAFE" | sed '/^$/d' > "$HOME/Downloads/safe_to_delete.txt"
+    # Пути пишем БЕЗ отступа: иначе xargs получит имя с ведущими пробелами
+    # и удаление сломается (или удалит не то).
+    printf '%s\n' "$SAFE" | sed '/^$/d; s/^[[:space:]]*//' > "$HOME/Downloads/safe_to_delete.txt"
     grn "Список безопасных к удалению: ~/Downloads/safe_to_delete.txt"
     cyn "Удалить одной командой:"
     echo "  xargs -d '\\n' rm -- < ~/Downloads/safe_to_delete.txt"
@@ -445,242 +675,18 @@ WORK="$HOME/Downloads/repo_deploy_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$WORK" || die "mkdir $WORK"
 NEW_REPOS=""
 
-# --- gh с таймаутом и ретраями --------------------------------------------------
-# Раньше вызовы шли голыми: одна просадка сети — и версия помечалась провальной,
-# а на зависшем соединении прогон мог стоять десятками минут.
-gh_try(){
-  _n=0
-  while :; do
-    if command -v timeout >/dev/null 2>&1; then
-      _o="$(timeout "$GH_TIMEOUT" gh "$@" 2>&1)"; _rc=$?
-    else
-      _o="$(gh "$@" 2>&1)"; _rc=$?
-    fi
-    [ "$_rc" -eq 0 ] && { printf '%s' "$_o"; return 0; }
-    # Ретраим ТОЛЬКО похожее на сбой связи. «Не найдено» и отказы прав —
-    # это ответ сервера, повтор их не изменит и только тормозит прогон.
-    case "$_rc:$_o" in
-      124:*|*timeout*|*"connection reset"*|*"could not resolve"*|*"TLS handshake"*|\
-      *"i/o timeout"*|*"EOF"*|*"502"*|*"503"*|*"504"*|*"rate limit"*|*"try again"*) : ;;
-      *) printf '%s' "$_o"; return "$_rc" ;;
-    esac
-    _n=$((_n+1))
-    [ "$_n" -ge 3 ] && { printf '%s' "$_o"; return "$_rc"; }
-    sleep $((_n * 5))
-  done
-}
-
-# Существует ли релиз. Отличает «нет релиза» (rc=1, ответ получен) от
-# «запрос не прошёл» (сеть/таймаут) — во втором случае возвращает 2 и версия
-# не считается отсутствующей. Раньше оба случая выглядели одинаково, и скрипт
-# пытался создать уже существующий релиз.
-release_state(){
-  _out="$(gh_try release view "v$2" --repo "$OWNER/$1" --json name 2>&1)"; _rc=$?
-  [ "$_rc" -eq 0 ] && return 0
-  case "$_out" in
-    *timeout*|*"connection reset"*|*"could not resolve"*|*"TLS handshake"*|\
-    *"i/o timeout"*|*"502"*|*"503"*|*"504"*) return 2 ;;
-  esac
-  return 1
-}
-
-# --- поиск CHANGELOG где угодно в дереве ----------------------------------------
-# Канон — корень репы (§46), но исторически файл живёт и в docs/, и в
-# 00-infrastructure/, и глубже. Ищем везде и выбираем тот, где ЕСТЬ секция версии:
-# наличие секции — единственный надёжный признак «это наш журнал».
-# find_changelog <корень> <версия> -> путь или пусто
-find_changelog(){
-  _root="$1"; _fv="$2"
-  # 1) приоритетные места по порядку
-  for _c in "$_root/CHANGELOG.md" "$_root/docs/CHANGELOG.md" \
-            "$_root/00-infrastructure/CHANGELOG.md" "$_root/CHANGELOG" "$_root/Changelog.md"; do
-    [ -f "$_c" ] && LC_ALL=C grep -qE "^#+ *\\[?$_fv\\]?( |\$|—|-)" "$_c" 2>/dev/null && { printf '%s' "$_c"; return 0; }
-  done
-  # 2) поиск по всему дереву — сначала тот, где есть секция версии
-  _found="$(find "$_root" -maxdepth 4 -iname 'CHANGELOG*.md' \
-              ! -path '*/node_modules/*' ! -path '*/.git/*' ! -path '*/_archive/*' \
-              ! -iname '*TEMPLATE*' ! -iname '*repos-map*' 2>/dev/null)"
-  for _c in $_found; do
-    LC_ALL=C grep -qE "^#+ *\\[?$_fv\\]?( |\$|—|-)" "$_c" 2>/dev/null && { printf '%s' "$_c"; return 0; }
-  done
-  # 3) секции нет нигде — вернём хоть какой-то журнал (приоритет корню)
-  for _c in "$_root/CHANGELOG.md" "$_root/docs/CHANGELOG.md" "$_root/00-infrastructure/CHANGELOG.md"; do
-    [ -f "$_c" ] && { printf '%s' "$_c"; return 0; }
-  done
-  for _c in $_found; do [ -f "$_c" ] && { printf '%s' "$_c"; return 0; }; done
-  return 1
-}
-
-# --- вспомогательное: заголовок + описание релиза по стандарту -------------------
-# build_notes <корень-дерева> <ver> <repo> <out.md>  -> печатает заголовок релиза
-build_notes(){
-  _clroot="$1"; _v="$2"; _r="$3"; _out="$4"
-  _thesis=""
-  # принимаем и готовый путь к файлу, и корень дерева
-  if [ -f "$_clroot" ]; then _cl="$_clroot"; else _cl="$(find_changelog "$_clroot" "$_v" || true)"; fi
-  CL_USED="$_cl"
-  if [ -n "$_cl" ] && [ -f "$_cl" ]; then
-    case "$_cl" in "$_clroot/CHANGELOG.md") : ;; *) dim "    CHANGELOG: ${_cl#$_clroot/}" >&2 ;; esac
-    _thesis="$(python3 "$PARSER" "$_cl" "$_v" "$_out" 2>"$WORK/parse_err.txt")"
-    if [ $? -ne 0 ]; then
-      ylw "    CHANGELOG: секции [$_v] нет — описание будет техническим" >&2
-      note "$_r|v$_v|описание|⚠ нет секции в CHANGELOG"
-      _thesis=""
-    else
-      grep -q NOBUMP   "$WORK/parse_err.txt" 2>/dev/null && \
-        { ylw "    CHANGELOG: в заголовке нет (MAJOR/MINOR/PATCH) — §2 стандарта" >&2; note "$_r|v$_v|формат|⚠ нет BUMP-маркера"; }
-      grep -q NOTHESIS "$WORK/parse_err.txt" 2>/dev/null && \
-        { ylw "    CHANGELOG: в заголовке нет тезиса — §2 стандарта" >&2; note "$_r|v$_v|формат|⚠ нет тезиса"; }
-    fi
-  else
-    red "    ✗ CHANGELOG не найден нигде в дереве" >&2
-    note "$_r|v$_v|описание|✗ CHANGELOG не найден"
-    loud "$_r v$_v: CHANGELOG не найден — релиз без описания НЕ создаю"
-    printf '' > "$_out"; return 1
-  fi
-  if [ ! -s "$_out" ]; then
-    red "    ✗ в CHANGELOG нет секции [$_v] — релиз без описания не создаю" >&2
-    loud "$_r v$_v: в CHANGELOG нет секции — добавь её и перезапусти с REPAIR=1"
-    return 1
-  fi
-  if [ -n "$_thesis" ]; then printf '%s v%s — %s\n' "$_r" "$_v" "$_thesis"
-  else printf '%s v%s\n' "$_r" "$_v"; fi
-}
-
-# release_is_stub <repo> <ver> -> 0 если описание пустое/заглушка (можно перезаписать)
-release_is_stub(){
-  _body="$(gh release view "v$2" --repo "$OWNER/$1" --json body --jq '.body' 2>/dev/null)"
-  [ -z "$_body" ] && return 0
-  printf '%s' "$_body" | grep -qE '^(Release |Синхронизация дерева)' && return 0
-  [ "$(printf '%s' "$_body" | wc -c | tr -d ' ')" -lt 40 ] && return 0
-  return 1
-}
-
-# ensure_release <repo> <ver> <notes.md> <title> <zip|"">
-ensure_release(){
-  _r="$1"; _v="$2"; _n="$3"; _t="$4"; _z="${5:-}"; _cl="${6:-}"
-  [ "$HAVE_GH" -eq 1 ] || { ylw "    gh нет — релиз v$_v вручную"; return 0; }
-  _aname="$_r-v$_v.zip"
-  _top="$(git tag -l 'v*' 2>/dev/null | sed 's/^v//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)"
-  _lat="--latest=false"; [ -z "$_top" ] || [ "$_v" = "$_top" ] && _lat="--latest=true"
-
-  if gh release view "v$_v" --repo "$OWNER/$_r" >/dev/null 2>&1; then
-    # ---- АУДИТ существующего релиза (идёт всегда, а не по флагу) ----------------
-    _ct="$(gh_try release view "v$_v" --repo "$OWNER/$_r" --json name --jq '.name' 2>/dev/null)"
-    _cb="$(gh_try release view "v$_v" --repo "$OWNER/$_r" --json body --jq '.body' 2>/dev/null)"
-    _fixt=0; _fixb=0
-    [ -n "$_t" ] || _t="$_ct"                       # нет эталона — сохраняем текущий
-    # заголовок: чиним, если расходится с эталоном из CHANGELOG
-    [ -n "$_t" ] && [ "$_ct" != "$_t" ] && _fixt=1
-    # тело: чиним заглушки; осмысленное, но расходящееся — только с FORCE
-    # Тело правим ТОЛЬКО когда есть чем: пустой notes-файл (нет секции в CHANGELOG)
-    # уходил в `gh release edit --notes-file <пусто>` и валил версию. Это и была
-    # причина всех «не удалось обновить» в прогоне с FORCE.
-    if [ ! -s "$_n" ]; then
-      _fixb=0
-      ylw "    ~ v$_v: нет секции в CHANGELOG — описание не трогаю"
-      note "$_r|v$_v|описание|~ нет секции"
-    elif release_is_stub "$_r" "$_v"; then _fixb=1
-    elif [ "$FORCE" = "1" ]; then _fixb=1
-    elif [ -s "$_n" ] && [ -n "$_cb" ]; then
-      if [ "$(printf '%s' "$_cb" | tr -d ' \n\r')" != "$(cat "$_n" | tr -d ' \n\r')" ]; then
-        ylw "    ~ v$_v: описание отличается от CHANGELOG — не трогаю (FORCE=1 чтобы синхронизировать)"
-        note "$_r|v$_v|описание|~ расходится с CHANGELOG"
-      fi
-    fi
-    if [ "$_fixt" = "1" ] || [ "$_fixb" = "1" ]; then
-      if [ "$_fixb" = "1" ]; then
-        # пустой заголовок НИКОГДА не отправляем — затрёт существующий
-        _targ=""; [ -n "$_t" ] && _targ="--title"
-        gh_try release edit "v$_v" --repo "$OWNER/$_r" ${_targ:+$_targ "$_t"} --notes-file "$_n" >/dev/null 2>&1 \
-          && { grn "    ✓ v$_v: заголовок и описание по стандарту"; note "$_r|v$_v|релиз|починен"; } \
-          || { red "    ✗ v$_v: не удалось обновить"; note "$_r|v$_v|релиз|✗ ошибка"; }
-      else
-        gh_try release edit "v$_v" --repo "$OWNER/$_r" --title "$_t" >/dev/null 2>&1 \
-          && { grn "    ✓ v$_v: заголовок → $_t"; note "$_r|v$_v|заголовок|починен"; } \
-          || { red "    ✗ v$_v: заголовок не обновлён"; note "$_r|v$_v|заголовок|✗ ошибка"; }
-      fi
-    fi
-  else
-    if [ "$ASSET" = "1" ] && [ -n "$_z" ]; then
-      cp "$_z" "$WORK/$_aname"
-      gh_try release create "v$_v" "$WORK/$_aname" --repo "$OWNER/$_r" --title "$_t" --notes-file "$_n" $_lat >/dev/null 2>&1 \
-        && { grn "    ✓ релиз v$_v (+ассет $_aname)"; note "$_r|v$_v|релиз|создан"; } \
-        || { red "    ✗ релиз v$_v не создан"; note "$_r|v$_v|релиз|✗ ошибка"; }
-      rm -f "$WORK/$_aname"; return 0
-    fi
-    gh_try release create "v$_v" --repo "$OWNER/$_r" --title "$_t" --notes-file "$_n" $_lat >/dev/null 2>&1 \
-      && { grn "    ✓ релиз v$_v"; note "$_r|v$_v|релиз|создан"; } \
-      || { red "    ✗ релиз v$_v не создан"; note "$_r|v$_v|релиз|✗ ошибка"; }
-  fi
-
-  # ---- канонический ассет (§4: ровно 3 ассета) ---------------------------------
-  if [ "$ASSET" = "1" ]; then
-    _have="$(gh_try release view "v$_v" --repo "$OWNER/$_r" --json assets --jq '.assets[].name' 2>/dev/null)"
-    if ! printf '%s\n' "$_have" | grep -qx "$_aname"; then
-      _src=""
-      if [ -n "$_z" ] && [ -f "$_z" ]; then
-        cp "$_z" "$WORK/$_aname"; _src="архив"
-      elif [ -n "$_cl" ] && git -C "$_cl" rev-parse "v$_v" >/dev/null 2>&1; then
-        # Архива под рукой нет (старая версия) — собираем канонический zip из тега.
-        # Содержимое то же дерево, обёртка по §43.
-        git -C "$_cl" archive --format=zip --prefix="$_r-v$_v/" "v$_v" -o "$WORK/$_aname" 2>/dev/null && _src="тег"
-      fi
-      if [ -n "$_src" ] && [ -f "$WORK/$_aname" ]; then
-        gh_try release upload "v$_v" "$WORK/$_aname" --repo "$OWNER/$_r" --clobber >/dev/null 2>&1 \
-          && { grn "    ✓ v$_v: ассет $_aname догружен (из: $_src)"; note "$_r|v$_v|ассет|догружен ($_src)"; } \
-          || { red "    ✗ v$_v: ассет не загрузился"; note "$_r|v$_v|ассет|✗ ошибка"; }
-        rm -f "$WORK/$_aname"
-      fi
-    fi
-
-    # ---- чистка дублей под старым именем (необратимо, только по флагу) ---------
-    # ВАЖНО: отдельным блоком ПОСЛЕ загрузки и только если канонический ассет
-    # реально лежит на релизе. Иначе при сбое сети можно снести единственную копию
-    # и не суметь положить замену.
-    if [ "$DROP_LEGACY_ASSETS" = "1" ]; then
-      _now="$(gh_try release view "v$_v" --repo "$OWNER/$_r" --json assets --jq '.assets[].name' 2>/dev/null)"
-      if printf '%s\n' "$_now" | grep -qx "$_aname"; then
-        _vd="$(printf '%s' "$_v" | tr '.' '_')"
-        printf '%s\n' "$_now" | while IFS= read -r _old; do
-          [ -n "$_old" ] || continue
-          [ "$_old" = "$_aname" ] && continue
-          # Сносим ТОЛЬКО zip той же версии под старым именем — это дубль
-          # канонического. Всё остальное (pdf, отчёты, архивы других версий)
-          # не трогаем: удаление ассета необратимо.
-          case "$_old" in *.zip) : ;; *) continue ;; esac
-          case "$_old" in
-            *"$_v"*|*"$_vd"*)
-              if [ "$DRY" = "1" ]; then
-                ylw "    − v$_v: снял бы дубль $_old (DRY)"
-              else
-                gh_try release delete-asset "v$_v" "$_old" --repo "$OWNER/$_r" --yes >/dev/null 2>&1 \
-                  && { ylw "    − v$_v: снят дубль под старым именем — $_old"; note "$_r|v$_v|ассет|снят дубль $_old"; } \
-                  || { red "    ✗ v$_v: не удалось снять $_old"; note "$_r|v$_v|ассет|✗ снятие"; }
-              fi ;;
-          esac
-        done
-      else
-        ylw "    ~ v$_v: канонического ассета нет — чистку дублей пропускаю"
-      fi
-    fi
-  fi
-
-}
-
 # --- ШАГ 2. Обработка каждой репы ------------------------------------------------
 while IFS= read -r REPO; do
   [ -n "$REPO" ] || continue
   echo ""; bld "══ Репозиторий: $REPO"
   URL="$REMOTE_BASE/$REPO.git"
-  IS_NEW=0
 
   if [ "$HAVE_GH" -eq 1 ] && ! gh repo view "$OWNER/$REPO" >/dev/null 2>&1; then
     VIS="--private"; [ "$PRIVATE" = "0" ] && VIS="--public"
     ylw "→ репозитория нет, создаю ($VIS)"
     gh repo create "$OWNER/$REPO" $VIS --description "$REPO" >/dev/null \
       || { red "не удалось создать $OWNER/$REPO — пропускаю репу"; note "$REPO|—|репа|✗ не создана"; continue; }
-    grn "✓ репозиторий создан"; IS_NEW=1; NEW_REPOS="$NEW_REPOS $REPO"
+    grn "✓ репозиторий создан"; NEW_REPOS="$NEW_REPOS $REPO"
     note "$REPO|—|репа|СОЗДАНА (новая)"
   fi
 

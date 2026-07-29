@@ -733,6 +733,80 @@ git -C "$SANDBOX/g51" push -q origin :refs/tags/v2.0.0 2>/dev/null   # и тег
 OUT="$(DROP_LEGACY_ASSETS=1 AUDIT=1 run_deploy "$D" || true)"
 assert_contains "легаси уцелел" "$(ls -1 "$A" | tr '\n' ' ')" "legacy_v2.0.0_old.zip"
 
+case_ "52. VERIFY: 'можно удалять' только когда на GitHub есть ВСЁ"
+D="$SANDBOX/t52"; mkdir -p "$D"
+make_zip "$D" "vfy-repo" "1.0.0" dot
+run_deploy "$D" >/dev/null
+OUT="$(VERIFY=1 run_deploy "$D")"
+assert_contains "полный комплект → можно удалять" "$OUT" "можно удалять"
+assert_contains "файл списка создан" "$(cat "$HOME/Downloads/safe_to_delete.txt" 2>/dev/null)" "vfy-repo-v1.0.0.zip"
+# путь обязан быть без отступа, иначе xargs rm сломается
+assert_missing "путь без ведущих пробелов" "$(head -1 "$HOME/Downloads/safe_to_delete.txt")" " /"
+xargs -d '\n' ls -1 -- < "$HOME/Downloads/safe_to_delete.txt" >/dev/null 2>&1 \
+  && ok "xargs находит файлы по списку" || bad "xargs находит файлы по списку"
+assert_missing "VERIFY ничего не публикует" "$OUT" "коммит:"
+# ломаем комплект: сносим ассет → архив держать
+rm -f "$GH_STORE/rel/vfy-repo/v1.0.0/assets/vfy-repo-v1.0.0.zip"
+: > "$HOME/Downloads/safe_to_delete.txt"
+OUT="$(VERIFY=1 run_deploy "$D")"
+assert_contains "без ассета — держать" "$OUT" "ДЕРЖАТЬ"
+assert_contains "причина названа" "$OUT" "ассет"
+assert_missing "в список безопасных НЕ попал" "$(cat "$HOME/Downloads/safe_to_delete.txt" 2>/dev/null)" "vfy-repo-v1.0.0.zip"
+# нет релиза вовсе
+rm -rf "$GH_STORE/rel/vfy-repo/v1.0.0"
+OUT="$(VERIFY=1 run_deploy "$D")"
+assert_contains "без релиза — держать" "$OUT" "ДЕРЖАТЬ"
+
+case_ "53. VERIFY не считает безопасным архив, которого нет в репе"
+D="$SANDBOX/t53"; mkdir -p "$D"
+make_zip "$D" "never-repo" "9.9.9" dot     # никогда не публиковался
+OUT="$(VERIFY=1 run_deploy "$D" || true)"
+assert_contains "неопубликованный — держать" "$OUT" "ДЕРЖАТЬ"
+assert_missing "не объявлен безопасным" "$OUT" "never-repo-v9.9.9.zip — на GitHub есть всё"
+
+case_ "54. PRIVATE: новые репы приватные по умолчанию, публичные только явно"
+D="$SANDBOX/t54"; mkdir -p "$D"
+make_zip "$D" "priv-repo" "1.0.0" dot
+run_deploy "$D" >/dev/null
+assert_eq "по умолчанию private" "$(cat "$GH_STORE/repos/priv-repo")" "private"
+assert_contains "флаг --private ушёл в gh" "$(LC_ALL=C grep 'repo create.*priv-repo' "$GH_STORE/calls.log" | tail -1)" "--private"
+D="$SANDBOX/t54b"; mkdir -p "$D"
+make_zip "$D" "pub-repo" "1.0.0" dot
+PRIVATE=0 run_deploy "$D" >/dev/null
+assert_eq "PRIVATE=0 → public" "$(cat "$GH_STORE/repos/pub-repo")" "public"
+
+case_ "55. Переопределяемые списки: SERVICE_RE, REPO_MAP, VARIANT_REPOS, MIN_FILES"
+D="$SANDBOX/t55"; mkdir -p "$D"
+make_zip "$D" "cfg-repo" "1.0.0" dot
+make_zip "$D" "junk-repo" "1.0.0" dot
+OUT="$(SERVICE_RE='^junk-repo-v1\.0\.0$' run_deploy "$D")"
+assert_contains "SERVICE_RE отсёк указанное" "$OUT" "пропущено служебных архивов: 1"
+[ ! -d "$REMOTES/junk-repo.git" ] && ok "репа по SERVICE_RE не создана" || bad "репа по SERVICE_RE не создана"
+D="$SANDBOX/t55b"; mkdir -p "$D"
+make_zip "$D" "src-name" "2.0.0" dot
+OUT="$(REPO_MAP='src-name=dst-name' run_deploy "$D")"
+assert_contains "REPO_MAP переопределён" "$OUT" "dst-name"
+[ -d "$REMOTES/dst-name.git" ] && ok "уехало в целевую репу" || bad "уехало в целевую репу"
+D="$SANDBOX/t55c"; mkdir -p "$D"
+make_zip "$D" "myproj" "3.0.0" dot
+mv "$D/myproj-v3.0.0.zip" "$D/myproj_v3_0_0_intl.zip"
+OUT="$(VARIANT_REPOS='myproj' run_deploy "$D")"
+assert_contains "VARIANT_REPOS переопределён" "$OUT" "myproj v3.0.0"
+D="$SANDBOX/t55d"; mkdir -p "$D"
+make_zip "$D" "big-repo" "1.0.0" dot
+OUT="$(MIN_FILES=999 run_deploy "$D" || true)"
+assert_contains "MIN_FILES соблюдён" "$OUT" "не похоже на репу"
+
+case_ "56. ASSET=0 — релиз без ассета, дерево и тег на месте"
+D="$SANDBOX/t56"; mkdir -p "$D"
+make_zip "$D" "noasset-repo" "1.0.0" dot
+OUT="$(ASSET=0 run_deploy "$D")"
+assert_eq "ассетов нет" "$(ls -1 "$GH_STORE/rel/noasset-repo/v1.0.0/assets" 2>/dev/null | grep -c . | tr -d ' ')" "0"
+git clone -q "$REMOTES/noasset-repo.git" "$SANDBOX/c56" 2>/dev/null
+assert_eq "дерево и тег опубликованы" "$(tag_tree_version "$SANDBOX/c56" 1.0.0)" "1.0.0"
+assert_contains "описание всё равно по стандарту" \
+  "$(cat "$GH_STORE/rel/noasset-repo/v1.0.0/title")" "noasset-repo v1.0.0 — Тезис"
+
 # =============================================================================
 printf '\n\033[1m── Итог\033[0m\n'
 printf '  \033[32mпройдено: %s\033[0m\n' "$PASS"
