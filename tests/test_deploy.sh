@@ -837,6 +837,32 @@ OUT="$(run_deploy "$D")"
 assert_contains "сказано, как узнать про удаление" "$OUT" "VERIFY=1"
 assert_contains "объяснено зачем" "$OUT" "Освободить место"
 
+case_ "G7" "Точка в имени ассета не матчит подчёркивание (потеря данных)"
+D="$SANDBOX/tG7"; mkdir -p "$D"
+make_zip "$D" "dot-repo" "1.0.1" dot
+run_deploy "$D" >/dev/null
+A="$GH_STORE/rel/dot-repo/v1.0.1/assets"
+rm -f "$A/dot-repo-v1.0.1.zip"          # канона нет
+echo x > "$A/dot-repo-v1_0_1.zip"        # есть только легаси с подчёркиваниями
+OUT="$(AUDIT=1 run_deploy "$D")"
+LEFT="$(ls -1 "$A" | sort | tr '\n' ' ')"
+assert_contains "канонический ассет создан" "$LEFT" "dot-repo-v1.0.1.zip"
+[ -n "$(ls -1 "$A" | grep -c .)" ] && ok "релиз не остался без ассета" || bad "релиз не остался без ассета"
+
+case_ "A8" "Сообщение коммита несёт версию и тезис, а не 'tree sync'"
+D="$SANDBOX/tA8"; mkdir -p "$D"
+make_zip "$D" "msg-repo" "1.0.0" dot
+run_deploy "$D" >/dev/null
+git clone -q "$REMOTES/msg-repo.git" "$SANDBOX/cA8" 2>/dev/null
+MSG="$(git -C "$SANDBOX/cA8" log -1 --pretty=%s)"
+assert_contains "в сообщении есть репа и версия" "$MSG" "msg-repo v1.0.0"
+assert_contains "в сообщении есть тезис" "$MSG" "Тезис версии"
+assert_missing "нет технического 'tree sync'" "$MSG" "tree sync"
+
+case_ "G8" "Команда удаления совместима с BSD xargs (macOS)"
+assert_missing "нет несуществующего на macOS -d" "$(grep 'safe_to_delete.txt' "$DEPLOY" | grep xargs)" "xargs -d"
+assert_contains "используется -0" "$(grep 'safe_to_delete.txt' "$DEPLOY" | grep xargs)" "xargs -0"
+
 # =============================================================================
 printf '\n\033[1m── Покрытие по зонам\033[0m\n'
 grp_name(){

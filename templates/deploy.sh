@@ -80,7 +80,7 @@ REMOTE_BASE="${REMOTE_BASE:-https://github.com/$OWNER}"   # переопреде
 MIN_FILES="${MIN_FILES:-5}"
 PRIVATE="${PRIVATE:-1}"
 ASSET="${ASSET:-1}"
-SCRIPT_VERSION="3.0.1"
+SCRIPT_VERSION="3.1.0"
 DRY="${DRY:-0}"
 AUDIT="${AUDIT:-0}"          # 1 = полная ревизия ВСЕХ релизов (долго)
 VERIFY="${VERIFY:-0}"        # 1 = только проверка «что можно удалять локально»
@@ -387,7 +387,7 @@ ensure_release(){
   # ---- канонический ассет (§4: ровно 3 ассета) ---------------------------------
   if [ "$ASSET" = "1" ]; then
     _have="$(gh_try release view "v$_v" --repo "$OWNER/$_r" --json assets --jq '.assets[].name' 2>/dev/null)"
-    if ! printf '%s\n' "$_have" | grep -qx "$_aname"; then
+    if ! printf '%s\n' "$_have" | grep -Fxq "$_aname"; then
       _src=""
       if [ -n "$_z" ] && [ -f "$_z" ]; then
         cp "$_z" "$WORK/$_aname"; _src="архив"
@@ -410,7 +410,7 @@ ensure_release(){
     # и не суметь положить замену.
     if [ "$KEEP_LEGACY_ASSETS" != "1" ] && [ "$DROP_LEGACY_ASSETS" = "1" ]; then
       _now="$(gh_try release view "v$_v" --repo "$OWNER/$_r" --json assets --jq '.assets[].name' 2>/dev/null)"
-      if printf '%s\n' "$_now" | grep -qx "$_aname"; then
+      if printf '%s\n' "$_now" | grep -Fxq "$_aname"; then
         _vd="$(printf '%s' "$_v" | tr '.' '_')"
         printf '%s\n' "$_now" | while IFS= read -r _old; do
           [ -n "$_old" ] || continue
@@ -664,7 +664,8 @@ if [ "$VERIFY" = "1" ]; then
     printf '%s\n' "$SAFE" | sed '/^$/d; s/^[[:space:]]*//' > "$HOME/Downloads/safe_to_delete.txt"
     grn "Список безопасных к удалению: ~/Downloads/safe_to_delete.txt"
     cyn "Удалить одной командой:"
-    echo "  xargs -d '\\n' rm -- < ~/Downloads/safe_to_delete.txt"
+    # BSD xargs (macOS) не знает -d — печатаем переносимый вариант
+    echo "  tr '\\n' '\\0' < ~/Downloads/safe_to_delete.txt | xargs -0 rm --"
   fi
   ylw ""
   ylw "Помни: после удаления единственная копия — GitHub (приватные репы)."
@@ -682,7 +683,27 @@ while IFS= read -r REPO; do
   echo ""; bld "══ Репозиторий: $REPO"
   URL="$REMOTE_BASE/$REPO.git"
 
-  if [ "$HAVE_GH" -eq 1 ] && ! gh repo view "$OWNER/$REPO" >/dev/null 2>&1; then
+  # Репу считаем отсутствующей ТОЛЬКО при внятном ответе сервера. Раньше любой
+  # сбой связи выглядел как «репы нет», и скрипт лез создавать существующую
+  # (случай с family: GraphQL «Name already exists»).
+  REPO_STATE=0
+  if [ "$HAVE_GH" -eq 1 ]; then
+    _rv="$(gh_try repo view "$OWNER/$REPO" --json name 2>&1)" || {
+      # По умолчанию «репы нет». Сбоем связи считаем только явные признаки —
+      # иначе любой обычный «не найдено» выглядит как отказ сети (эту ошибку
+      # уже допускали с релизами, повторять нельзя).
+      REPO_STATE=1
+      case "$_rv" in
+        *timeout*|*"connection reset"*|*"TLS handshake"*|*"i/o timeout"*|\
+        *"502"*|*"503"*|*"504"*|*"rate limit"*) REPO_STATE=2 ;;
+      esac
+    }
+  fi
+  if [ "$REPO_STATE" -eq 2 ]; then
+    red "→ $REPO: GitHub не отвечает — пропускаю репу (перезапусти позже)"
+    note "$REPO|—|репа|✗ сеть"; continue
+  fi
+  if [ "$HAVE_GH" -eq 1 ] && [ "$REPO_STATE" -eq 1 ]; then
     VIS="--private"; [ "$PRIVATE" = "0" ] && VIS="--public"
     ylw "→ репозитория нет, создаю ($VIS)"
     gh repo create "$OWNER/$REPO" $VIS --description "$REPO" >/dev/null \
@@ -697,7 +718,7 @@ while IFS= read -r REPO; do
   # (тогда сбой = сетевой таймаут). Если репы нет — ретраи это просто минута впустую.
   if ! git clone "$URL" "$CLONE" 2>/dev/null; then
     REPO_EXISTS=0
-    [ "$HAVE_GH" -eq 1 ] && gh repo view "$OWNER/$REPO" >/dev/null 2>&1 && REPO_EXISTS=1
+    [ "$REPO_STATE" -eq 0 ] && REPO_EXISTS=1
     if [ "$REPO_EXISTS" = "1" ]; then
       ylw "  репа существует — похоже на сетевой сбой, повторяю"
       retry "git clone" git clone "$URL" "$CLONE" 2>/dev/null \
@@ -813,7 +834,11 @@ while IFS= read -r REPO; do
     if git diff --cached --quiet && [ -n "$(git tag -l)" ]; then
       ylw "  дерево не изменилось — ставлю только тег"
     else
-      git commit -q -m "release: v$VER — $REPO tree sync" || { red "  commit не удался"; continue; }
+      # Сообщение коммита по §42: «<repo> vX.Y.Z — <тезис>». «tree sync» ничего
+      # не говорит о содержании версии — в истории git такой коммит бесполезен.
+      CMSG="$(build_notes "$SRC" "$VER" "$REPO" "$NOTES_DIR/v$VER.md" 2>/dev/null)" || CMSG=""
+      [ -n "$CMSG" ] || CMSG="$REPO v$VER"
+      git commit -q -m "$CMSG" || { red "  commit не удался"; continue; }
       TREE_N=$(find . -path ./.git -prune -o -type f -print | wc -l | tr -d ' ')
       GIT_N=$(git ls-tree -r --name-only HEAD | wc -l | tr -d ' ')
       if [ "$GIT_N" != "$TREE_N" ]; then
