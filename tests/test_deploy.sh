@@ -16,9 +16,18 @@ DEPLOY="${DEPLOY:-$HERE/../templates/deploy.sh}"
 [ -f "$DEPLOY" ] || { echo "не найден deploy.sh: $DEPLOY"; exit 1; }
 
 PASS=0; FAIL=0; CURRENT=""
-ok(){   printf '  \033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS+1)); }
-bad(){  printf '  \033[31m✗ %s\033[0m\n' "$1"; [ -n "${2:-}" ] && printf '      %s\n' "$2"; FAIL=$((FAIL+1)); }
-case_(){ CURRENT="$1"; printf '\n\033[1m%s\033[0m\n' "$1"; }
+ok(){   printf '  \033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS+1)); grp_hit G_OK; }
+bad(){  printf '  \033[31m✗ %s\033[0m\n' "$1"; [ -n "${2:-}" ] && printf '      %s\n' "$2"; FAIL=$((FAIL+1)); grp_hit G_BAD; }
+# Кейс объявляется с ИДЕНТИФИКАТОРОМ ЗОНЫ (A1, B3, ...), а не сквозным номером:
+# номер говорит только «какой по счёту», буква — «что именно проверяется».
+G_CUR=""; G_LIST=""
+case_(){
+  CURRENT="$2"; G_CUR="$(printf '%s' "$1" | cut -c1)"
+  case " $G_LIST " in *" $G_CUR "*) : ;; *) G_LIST="$G_LIST $G_CUR" ;; esac
+  eval "G_TOT_$G_CUR=\${G_TOT_$G_CUR:-0}"
+  printf '\n\033[1m[%s] %s\033[0m\n' "$1" "$2"
+}
+grp_hit(){ eval "$1_$G_CUR=\$(( \${$1_$G_CUR:-0} + 1 ))"; }
 assert_eq(){ [ "$2" = "$3" ] && ok "$1" || bad "$1" "ждал: [$3]  получил: [$2]"; }
 assert_contains(){ printf '%s' "$2" | grep -qF -- "$3" && ok "$1" || bad "$1" "нет подстроки: $3"; }
 assert_missing(){ printf '%s' "$2" | grep -qF -- "$3" && bad "$1" "не должно быть: $3" || ok "$1"; }
@@ -75,7 +84,7 @@ run_deploy(){ ( cd "$1" && bash "$DEPLOY" "$1" 2>&1 ); }
 tag_tree_version(){ git -C "$1" show "v$2:VERSION" 2>/dev/null | tr -d ' \n'; }
 
 # =============================================================================
-case_ "1. Новая репа: создание, коммит, тег, релиз, ассет"
+case_ "A1" "Новая репа: создание, коммит, тег, релиз, ассет"
 D="$SANDBOX/t1"; mkdir -p "$D"
 make_zip "$D" "alpha-repo" "1.0.0" dot
 OUT="$(run_deploy "$D")"
@@ -91,7 +100,7 @@ assert_eq "канонический ассет приложен" \
   "$(ls -1 "$GH_STORE/rel/alpha-repo/v1.0.0/assets" 2>/dev/null)" "alpha-repo-v1.0.0.zip"
 
 # =============================================================================
-case_ "2. Серия версий: каждый тег указывает на СВОЁ дерево (регресс PIT-014)"
+case_ "G1" "Серия версий: каждый тег указывает на СВОЁ дерево (регресс PIT-014)"
 D="$SANDBOX/t2"; mkdir -p "$D"
 for v in 1.0.0 1.1.0 1.2.0; do make_zip "$D" "beta-repo" "$v" dot; done
 touch -t 202607240000 "$D"/*.zip           # одинаковый mtime — тот самый триггер бага
@@ -105,7 +114,7 @@ assert_eq "порядок версий соблюдён (HEAD = старшая)"
   "$(git -C "$SANDBOX/c2" show HEAD:VERSION | tr -d ' \n')" "1.2.0"
 
 # =============================================================================
-case_ "3. Идемпотентность: повторный прогон ничего не меняет"
+case_ "A2" "Идемпотентность: повторный прогон ничего не меняет"
 BEFORE="$(git -C "$SANDBOX/c2" rev-parse HEAD)"
 OUT="$(run_deploy "$SANDBOX/t2")"
 git -C "$SANDBOX/c2" fetch -q origin 2>/dev/null
@@ -114,7 +123,7 @@ assert_contains "версии распознаны как опубликован
 assert_missing "новых коммитов не было" "$OUT" "✓ коммит:"
 
 # =============================================================================
-case_ "4. Нейминг: подчёркивания принимаются, но помечаются как неканон"
+case_ "B1" "Нейминг: подчёркивания принимаются, но помечаются как неканон"
 D="$SANDBOX/t4"; mkdir -p "$D"
 make_zip "$D" "gamma-repo" "1.0.0" under
 OUT="$(run_deploy "$D")"
@@ -126,7 +135,7 @@ assert_eq "ассет всё равно с точками" \
   "$(ls -1 "$GH_STORE/rel/gamma-repo/v1.0.0/assets" 2>/dev/null)" "gamma-repo-v1.0.0.zip"
 
 # =============================================================================
-case_ "5. Упаковка: __MACOSX/.DS_Store рядом с обёрткой не ломают пуш (PIT-015)"
+case_ "C1" "Упаковка: __MACOSX/.DS_Store рядом с обёрткой не ломают пуш (PIT-015)"
 D="$SANDBOX/t5"; mkdir -p "$D"
 make_zip "$D" "delta-repo" "1.0.0" dot --junk
 OUT="$(run_deploy "$D")"
@@ -138,7 +147,7 @@ assert_missing "__MACOSX выкинут" "$FILES" "__MACOSX"
 assert_missing ".DS_Store выкинут" "$FILES" ".DS_Store"
 
 # =============================================================================
-case_ "6. Рабочие копии и дубликаты НЕ публикуются, но названы вслух"
+case_ "B2" "Рабочие копии и дубликаты НЕ публикуются, но названы вслух"
 D="$SANDBOX/t6"; mkdir -p "$D"
 for tail in " copy" " (copy)" "__copy_" " (1)"; do
   make_zip "$D" "eps-repo" "1.0.0" dot
@@ -154,7 +163,7 @@ git clone -q "$REMOTES/eps-repo.git" "$SANDBOX/c6" 2>/dev/null
 assert_eq "нормальный архив рядом опубликован" "$(git -C "$SANDBOX/c6" tag -l)" "v1.0.0"
 
 # =============================================================================
-case_ "7. Битый архив: нет README — версия пропускается, репа не разрушена"
+case_ "C2" "Битый архив: нет README — версия пропускается, репа не разрушена"
 D="$SANDBOX/t7"; mkdir -p "$D"
 make_zip "$D" "beta-repo" "1.3.0" dot --noreadme
 OUT="$(run_deploy "$D")"
@@ -164,7 +173,7 @@ assert_missing "битый тег НЕ создан" "$(git -C "$SANDBOX/c2" tag
 assert_eq "старое дерево цело" "$(git -C "$SANDBOX/c2" show origin/main:VERSION | tr -d ' \n')" "1.2.0"
 
 # =============================================================================
-case_ "8. VERSION в дереве ≠ версии в имени — стоп по этой версии"
+case_ "C3" "VERSION в дереве ≠ версии в имени — стоп по этой версии"
 D="$SANDBOX/t8"; mkdir -p "$D"
 make_zip "$D" "zeta-repo" "1.0.0" dot
 tmp="$(mktemp -d)"; ( cd "$tmp" && unzip -qo "$D/zeta-repo-v1.0.0.zip" )
@@ -177,7 +186,7 @@ assert_contains "рассинхрон пойман" "$OUT" "VERSION в дере�
   || ok "тег не поставлен"
 
 # =============================================================================
-case_ "9. DRY=1 — только план, ни одного изменения"
+case_ "E1" "DRY=1 — только план, ни одного изменения"
 D="$SANDBOX/t9"; mkdir -p "$D"
 make_zip "$D" "eta-repo" "1.0.0" dot
 OUT="$(DRY=1 run_deploy "$D")"
@@ -187,7 +196,7 @@ assert_contains "сказано, что это план" "$OUT" "DRY=1"
 [ ! -f "$GH_STORE/repos/eta-repo" ] && ok "gh не звали на создание" || bad "gh не звали на создание"
 
 # =============================================================================
-case_ "10. Описания: заглушка чинится, осмысленное описание не трогается"
+case_ "D1" "Описания: заглушка чинится, осмысленное описание не трогается"
 mkdir -p "$GH_STORE/rel/alpha-repo/v1.0.0"
 printf 'Release 1.0.0' > "$GH_STORE/rel/alpha-repo/v1.0.0/body"
 printf 'alpha-repo v1.0.0' > "$GH_STORE/rel/alpha-repo/v1.0.0/title"
@@ -209,7 +218,7 @@ OUT="$(FORCE=1 run_deploy "$SANDBOX/t1")"
 assert_contains "с FORCE=1 синхронизировано" "$(cat "$GH_STORE/rel/alpha-repo/v1.0.0/body")" "Опорный абзац"
 
 # =============================================================================
-case_ "11. CHANGELOG без тезиса — предупреждение, но публикация идёт"
+case_ "D2" "CHANGELOG без тезиса — предупреждение, но публикация идёт"
 D="$SANDBOX/t11"; mkdir -p "$D"
 make_zip "$D" "theta-repo" "1.0.0" dot --nothesis
 OUT="$(run_deploy "$D")"
@@ -218,7 +227,7 @@ assert_eq "релиз всё равно создан" \
   "$(cat "$GH_STORE/rel/theta-repo/v1.0.0/title" 2>/dev/null)" "theta-repo v1.0.0"
 
 # =============================================================================
-case_ "12. Fail loud: тег указывает на чужое дерево — скрипт не чинит молча"
+case_ "G2" "Fail loud: тег указывает на чужое дерево — скрипт не чинит молча"
 git clone -q "$REMOTES/alpha-repo.git" "$SANDBOX/c12" 2>/dev/null
 ( cd "$SANDBOX/c12" && printf '7.7.7' > VERSION && git add -A && \
   git commit -q -m "bad" && git tag -f -a v7.7.0 -m x >/dev/null 2>&1 && \
@@ -230,7 +239,7 @@ assert_contains "названа суть проблемы" "$OUT" "VERSION=7.7.7
 assert_contains "новая версия всё равно опубликована" "$OUT" "v1.1.0"
 
 # =============================================================================
-case_ "13. ONLY / SKIP"
+case_ "E2" "ONLY / SKIP"
 D="$SANDBOX/t13"; mkdir -p "$D"
 make_zip "$D" "iota-repo" "1.0.0" dot
 make_zip "$D" "kappa-repo" "1.0.0" dot
@@ -241,7 +250,7 @@ OUT="$(SKIP="kappa-repo" run_deploy "$D")"
 assert_missing "SKIP: репа пропущена" "$OUT" "══ Репозиторий: kappa-repo"
 
 # =============================================================================
-case_ "14. repos-map: новая репа регистрируется автоматически"
+case_ "H1" "repos-map: новая репа регистрируется автоматически"
 MAPDIR="$SANDBOX/base-repo"; mkdir -p "$MAPDIR"
 printf '# Карта\n\n**Актуальность:** 2026-01-01\n\n## `old-repo`\nОписание.\n\n---\n\n# 📐 Стандарт репозитория\n' \
   > "$MAPDIR/repos-map.md"
@@ -258,7 +267,7 @@ assert_eq "повторно не дублируется" \
   "$(grep -c 'lambda-repo' "$MAPDIR/repos-map.md")" "1"
 
 # =============================================================================
-case_ "15. repos-map: правка не теряется во временном клоне (регресс боевого прогона)"
+case_ "H2" "repos-map: правка не теряется во временном клоне (регресс боевого прогона)"
 D="$SANDBOX/t15"; mkdir -p "$D"
 make_zip "$D" "base-repo" "1.0.0" dot          # base-repo деплоится в этом же прогоне
 make_zip "$D" "mu-repo"   "1.0.0" dot
@@ -273,7 +282,7 @@ fi
 assert_missing "во временный клон не писали" "$OUT" "repo_deploy_"
 
 # =============================================================================
-case_ "16. Исторический нейминг: все встречавшиеся варианты читаются"
+case_ "B3" "Исторический нейминг: все встречавшиеся варианты читаются"
 D="$SANDBOX/t16"; mkdir -p "$D"
 make_zip "$D" "nu-repo" "1.0.0" dot
 # каждый вариант — настоящий архив своей версии, переименован в исторический формат
@@ -291,7 +300,7 @@ for v in 1.1.0 1.2.0 1.3.0 1.4.0 1.5.0; do
 done
 assert_contains "неканон помечен" "$OUT" "канон это ТОЧКИ"
 
-case_ "17. Двухчастная версия (v1.2) достраивается до X.Y.0"
+case_ "B4" "Двухчастная версия (v1.2) достраивается до X.Y.0"
 D="$SANDBOX/t17"; mkdir -p "$D"
 make_zip "$D" "xi-repo" "2.7.0" dot
 mv "$D/xi-repo-v2.7.0.zip" "$D/xi-repo-v2.7.zip"
@@ -299,7 +308,7 @@ OUT="$(DRY=1 run_deploy "$D")"
 assert_contains "версия достроена" "$OUT" "2.7.0"
 assert_contains "сказано про правило" "$OUT" "всегда X.Y.Z"
 
-case_ "18. SemVer-сортировка: 2.9.0 младше 2.10.0 (не строковое сравнение)"
+case_ "A3" "SemVer-сортировка: 2.9.0 младше 2.10.0 (не строковое сравнение)"
 D="$SANDBOX/t18"; mkdir -p "$D"
 for v in 2.9.0 2.10.0 2.12.0; do make_zip "$D" "omicron-repo" "$v" dot; done
 OUT="$(run_deploy "$D")"
@@ -310,7 +319,7 @@ for v in 2.9.0 2.10.0 2.12.0; do
   assert_eq "тег v$v → своё дерево" "$(tag_tree_version "$SANDBOX/c18" "$v")" "$v"
 done
 
-case_ "19. Плоская упаковка (без обёртки) — тоже работает"
+case_ "C4" "Плоская упаковка (без обёртки) — тоже работает"
 D="$SANDBOX/t19"; mkdir -p "$D"
 make_zip "$D" "pi-repo" "1.0.0" dot --flat
 OUT="$(run_deploy "$D")"
@@ -318,7 +327,7 @@ git clone -q "$REMOTES/pi-repo.git" "$SANDBOX/c19" 2>/dev/null
 assert_eq "версия опубликована" "$(tag_tree_version "$SANDBOX/c19" 1.0.0)" "1.0.0"
 assert_contains "README в корне" "$(git -C "$SANDBOX/c19" ls-tree --name-only v1.0.0)" "README.md"
 
-case_ "20. Двойная обёртка (папка в папке) разворачивается"
+case_ "C5" "Двойная обёртка (папка в папке) разворачивается"
 D="$SANDBOX/t20"; mkdir -p "$D"
 make_zip "$D" "rho-repo" "1.0.0" dot
 tmp="$(mktemp -d)"; ( cd "$tmp" && unzip -qo "$D/rho-repo-v1.0.0.zip" )
@@ -329,7 +338,7 @@ git clone -q "$REMOTES/rho-repo.git" "$SANDBOX/c20" 2>/dev/null
 assert_contains "обёртка развёрнута на 2 уровня" "$OUT" "уровней: 2"
 assert_contains "README в корне" "$(git -C "$SANDBOX/c20" ls-tree --name-only v1.0.0)" "README.md"
 
-case_ "21. Слишком мало файлов — не считаем это репой"
+case_ "C6" "Слишком мало файлов — не считаем это репой"
 D="$SANDBOX/t21"; mkdir -p "$D"
 tmp="$(mktemp -d)"; mkdir -p "$tmp/sigma-repo-v1.0.0"
 echo "# x" > "$tmp/sigma-repo-v1.0.0/README.md"; printf '1.0.0' > "$tmp/sigma-repo-v1.0.0/VERSION"
@@ -338,7 +347,7 @@ OUT="$(run_deploy "$D")"; rm -rf "$tmp"
 assert_contains "отказ с объяснением" "$OUT" "не похоже на репу"
 [ ! -d "$REMOTES/sigma-repo.git" ] && ok "репа не создана" || bad "репа не создана"
 
-case_ "22. Битый zip не роняет батч — соседняя репа публикуется"
+case_ "C7" "Битый zip не роняет батч — соседняя репа публикуется"
 D="$SANDBOX/t22"; mkdir -p "$D"
 make_zip "$D" "tau-repo" "1.0.0" dot
 printf 'это не zip' > "$D/upsilon-repo-v1.0.0.zip"
@@ -347,7 +356,7 @@ assert_contains "битый архив назван" "$OUT" "upsilon-repo"
 git clone -q "$REMOTES/tau-repo.git" "$SANDBOX/c22" 2>/dev/null
 assert_eq "соседняя репа всё равно опубликована" "$(tag_tree_version "$SANDBOX/c22" 1.0.0)" "1.0.0"
 
-case_ "23. BACKFILL: старая версия по умолчанию не заливается"
+case_ "E3" "BACKFILL: старая версия по умолчанию не заливается"
 D="$SANDBOX/t23"; mkdir -p "$D"
 make_zip "$D" "phi-repo" "2.0.0" dot
 run_deploy "$D" >/dev/null
@@ -358,7 +367,7 @@ OUT="$(BACKFILL=1 run_deploy "$D")"
 git clone -q "$REMOTES/phi-repo.git" "$SANDBOX/c23" 2>/dev/null
 assert_contains "с BACKFILL=1 залилась" "$(git -C "$SANDBOX/c23" tag -l | tr '\n' ' ')" "v1.0.0"
 
-case_ "24. FORCE: осмысленное описание перезаписывается только явно"
+case_ "E4" "FORCE: осмысленное описание перезаписывается только явно"
 GOOD="$(cat "$GH_STORE/rel/tau-repo/v1.0.0/body")"
 printf 'РУЧНОЕ ОПИСАНИЕ, написанное человеком и вполне осмысленное' > "$GH_STORE/rel/tau-repo/v1.0.0/body"
 OUT="$(REPAIR=1 run_deploy "$SANDBOX/t22")"
@@ -366,7 +375,7 @@ assert_contains "без FORCE не тронуто" "$(cat "$GH_STORE/rel/tau-rep
 OUT="$(REPAIR=1 FORCE=1 run_deploy "$SANDBOX/t22")"
 assert_contains "с FORCE=1 перезаписано из CHANGELOG" "$(cat "$GH_STORE/rel/tau-repo/v1.0.0/body")" "Опорный абзац"
 
-case_ "25. ASSETS_ONLY: догружает ассет, дерево не трогает"
+case_ "E5" "ASSETS_ONLY: догружает ассет, дерево не трогает"
 rm -rf "$GH_STORE/rel/tau-repo/v1.0.0/assets"; mkdir -p "$GH_STORE/rel/tau-repo/v1.0.0/assets"
 BEFORE="$(git -C "$SANDBOX/c22" rev-parse HEAD)"
 OUT="$(ASSETS_ONLY=1 run_deploy "$SANDBOX/t22")"
@@ -374,22 +383,22 @@ assert_eq "ассет догружен" "$(ls -1 "$GH_STORE/rel/tau-repo/v1.0.0/
 git -C "$SANDBOX/c22" fetch -q origin 2>/dev/null
 assert_eq "дерево не сдвинулось" "$(git -C "$SANDBOX/c22" rev-parse origin/main)" "$BEFORE"
 
-case_ "26. Кириллица и тире в описании не бьются (UTF-8 через notes-file)"
+case_ "I1" "Кириллица и тире в описании не бьются (UTF-8 через notes-file)"
 assert_contains "русский текст цел" "$(cat "$GH_STORE/rel/alpha-repo/v1.0.0/body")" "Опорный абзац"
 assert_contains "em-dash из заголовка цел" "$(cat "$GH_STORE/rel/alpha-repo/v1.0.0/title")" "—"
 
-case_ "27. В папке нет архивов — понятное сообщение, а не молчание"
+case_ "C8" "В папке нет архивов — понятное сообщение, а не молчание"
 D="$SANDBOX/t27"; mkdir -p "$D"; echo x > "$D/readme.txt"; echo y > "$D/notes.md"
 OUT="$(run_deploy "$D" || true)"
 assert_contains "объяснено, чего ждали" "$OUT" "версионных архивов не найдено"
 
-case_ "28. NO_COLOR: в пайп уходит чистый текст без ANSI"
+case_ "I2" "NO_COLOR: в пайп уходит чистый текст без ANSI"
 D="$SANDBOX/t28"; mkdir -p "$D"
 make_zip "$D" "chi-repo" "1.0.0" dot
 OUT="$(DRY=1 run_deploy "$D")"
 printf '%s' "$OUT" | grep -q "$(printf '\033')" && bad "ANSI-кодов нет в неинтерактивном выводе" || ok "ANSI-кодов нет в неинтерактивном выводе"
 
-case_ "29. Репа существует, но пустая (нет коммитов) — публикуем без падения"
+case_ "A4" "Репа существует, но пустая (нет коммитов) — публикуем без падения"
 git init -q --bare "$REMOTES/psi-repo.git"
 echo private > "$GH_STORE/repos/psi-repo"
 D="$SANDBOX/t29"; mkdir -p "$D"
@@ -398,7 +407,7 @@ OUT="$(run_deploy "$D")"
 git clone -q "$REMOTES/psi-repo.git" "$SANDBOX/c29" 2>/dev/null
 assert_eq "версия опубликована в пустую репу" "$(tag_tree_version "$SANDBOX/c29" 1.0.0)" "1.0.0"
 
-case_ "30. Несколько реп за один прогон — все обработаны"
+case_ "A5" "Несколько реп за один прогон — все обработаны"
 D="$SANDBOX/t30"; mkdir -p "$D"
 for r in aa-repo bb-repo cc-repo; do make_zip "$D" "$r" "1.0.0" dot; done
 OUT="$(run_deploy "$D")"
@@ -407,7 +416,7 @@ for r in aa-repo bb-repo cc-repo; do
   assert_eq "$r опубликована" "$(tag_tree_version "$SANDBOX/c30-$r" 1.0.0)" "1.0.0"
 done
 
-case_ "31. Вложенная репа со своим VERSION не путает предполёт (регресс на реальном архиве)"
+case_ "C9" "Вложенная репа со своим VERSION не путает предполёт (регресс на реальном архиве)"
 D="$SANDBOX/t31"; mkdir -p "$D"
 make_zip "$D" "omega-repo" "2.0.0" dot
 tmp="$(mktemp -d)"; ( cd "$tmp" && unzip -qo "$D/omega-repo-v2.0.0.zip" )
@@ -422,7 +431,7 @@ assert_eq "репа с вложенной репой опубликована" "
 assert_contains "вложенная репа сохранена в дереве" \
   "$(git -C "$SANDBOX/c31" ls-tree -r --name-only v2.0.0)" "base-repo/VERSION"
 
-case_ "32. Служебные архивы из чата игнорируются молча"
+case_ "B5" "Служебные архивы из чата игнорируются молча"
 D="$SANDBOX/t32"; mkdir -p "$D"
 make_zip "$D" "zeta2-repo" "1.0.0" dot
 for junk in "1" "16" "files" "files 10" "Archive_2"; do
@@ -436,7 +445,7 @@ assert_missing "нет жалоб на нечитаемую версию" "$OUT"
 git clone -q "$REMOTES/zeta2-repo.git" "$SANDBOX/c32" 2>/dev/null
 assert_eq "нормальная репа рядом опубликована" "$(tag_tree_version "$SANDBOX/c32" 1.0.0)" "1.0.0"
 
-case_ "33. Вариантный постфикс: только для реп из VARIANT_REPOS"
+case_ "B6" "Вариантный постфикс: только для реп из VARIANT_REPOS"
 D="$SANDBOX/t33"; mkdir -p "$D"
 make_zip "$D" "finpilot" "6.20.1" dot
 mv "$D/finpilot-v6.20.1.zip" "$D/finpilot_v6_20_1_intl.zip"
@@ -459,7 +468,7 @@ assert_contains "без постфикса тоже уехал в personal-finan
 assert_eq "обе версии в одной репе" \
   "$(git -C "$SANDBOX/c33" tag -l | LC_ALL=C grep -c .)" "2"
 
-case_ "34. Не-UTF-8 имена внутри архива не роняют предполёт"
+case_ "I3" "Не-UTF-8 имена внутри архива не роняют предполёт"
 D="$SANDBOX/t34"; mkdir -p "$D"
 tmp="$(mktemp -d)"; root="$tmp/iota2-repo-v1.0.0"; mkdir -p "$root/src"
 echo "# iota2-repo" > "$root/README.md"; printf '1.0.0' > "$root/VERSION"
@@ -473,7 +482,7 @@ assert_missing "нет Illegal byte sequence" "$OUT" "Illegal byte sequence"
 git clone -q "$REMOTES/iota2-repo.git" "$SANDBOX/c34" 2>/dev/null
 assert_eq "репа опубликована" "$(tag_tree_version "$SANDBOX/c34" 1.0.0)" "1.0.0"
 
-case_ "35. REPO_MAP: архив едет в репу с другим именем"
+case_ "B7" "REPO_MAP: архив едет в репу с другим именем"
 D="$SANDBOX/t35"; mkdir -p "$D"
 make_zip "$D" "finpilot" "6.20.1" dot
 mv "$D/finpilot-v6.20.1.zip" "$D/finpilot_v6_20_1_intl.zip"
@@ -486,7 +495,7 @@ assert_eq "версия на месте" "$(tag_tree_version "$SANDBOX/c35" 6.20
 assert_eq "ассет назван по РЕПЕ, не по архиву" \
   "$(ls -1 "$GH_STORE/rel/personal-finance-dss/v6.20.1/assets")" "personal-finance-dss-v6.20.1.zip"
 
-case_ "36. Аудит: не версионные архивы перечислены, а не пропали молча"
+case_ "B8" "Аудит: не версионные архивы перечислены, а не пропали молча"
 D="$SANDBOX/t36"; mkdir -p "$D"
 make_zip "$D" "psi2-repo" "1.0.0" dot
 make_zip "$D" "tmp-repo" "9.9.9" dot; mv "$D/tmp-repo-v9.9.9.zip" "$D/аыва.zip"
@@ -497,7 +506,7 @@ assert_contains "кириллическое имя названо" "$OUT" "аы�
 assert_contains "имя с пробелами названо" "$OUT" "скрипты для работы.zip"
 [ ! -d "$REMOTES/аыва.git" ] && ok "репа для мусора не создана" || bad "репа для мусора не создана"
 
-case_ "37. Latest: при backfill старая версия не помечается свежей"
+case_ "A6" "Latest: при backfill старая версия не помечается свежей"
 D="$SANDBOX/t37"; mkdir -p "$D"
 make_zip "$D" "lat-repo" "2.0.0" dot
 run_deploy "$D" >/dev/null
@@ -508,7 +517,7 @@ assert_contains "старая версия создана как не-latest" \
 assert_contains "старшая версия помечена latest" \
   "$(LC_ALL=C grep 'release create v2.0.0' "$GH_STORE/calls.log" | tail -1)" "--latest=true"
 
-case_ "38. macOS-хвост ' 1' после версии — это дубликат, а не нечитаемая версия"
+case_ "B9" "macOS-хвост ' 1' после версии — это дубликат, а не нечитаемая версия"
 D="$SANDBOX/t38"; mkdir -p "$D"
 make_zip "$D" "dup-repo" "1.2.5" dot
 cp "$D/dup-repo-v1.2.5.zip" "$D/dup-repo_v1.2.5 1.zip"
@@ -519,7 +528,7 @@ assert_missing "не жалуется на нечитаемую версию" "$
 git clone -q "$REMOTES/dup-repo.git" "$SANDBOX/c38" 2>/dev/null
 assert_eq "оригинал опубликован ровно один раз" "$(git -C "$SANDBOX/c38" tag -l | LC_ALL=C grep -c .)" "1"
 
-case_ "39. Имя без версионного токена — тихий аудит, без жёлтой жалобы"
+case_ "B10" "Имя без версионного токена — тихий аудит, без жёлтой жалобы"
 D="$SANDBOX/t39"; mkdir -p "$D"
 make_zip "$D" "quiet-repo" "1.0.0" dot
 make_zip "$D" "tmp-repo" "9.9.9" dot; mv "$D/tmp-repo-v9.9.9.zip" "$D/recognition-test-session-1.zip"
@@ -528,7 +537,7 @@ assert_contains "попало в аудит" "$OUT" "recognition-test-session-1.
 assert_missing "без жалобы на версию" "$OUT" "не читается"
 [ ! -d "$REMOTES/recognition-test-session-1.git" ] && ok "репа не заведена" || bad "репа не заведена"
 
-case_ "40. repos-map обновляется сама, без переменных окружения"
+case_ "H3" "repos-map обновляется сама, без переменных окружения"
 MAPREMOTE="$REMOTES/base-repo.git"
 rm -rf "$MAPREMOTE" "$SANDBOX/mapseed"
 git init -q --bare "$MAPREMOTE"
@@ -548,7 +557,7 @@ assert_contains "новая репа в карте на remote" "$(cat "$SANDBOX
 assert_contains "запись в истории карты" "$(cat "$SANDBOX/mapcheck/repos-map-CHANGELOG.md")" "brand-new-repo"
 assert_missing "не просит задать переменную" "$OUT" "BASE_REPO="
 
-case_ "41. CHANGELOG в подпапке находится (регресс: 6 пустых релизов base-repo)"
+case_ "D3" "CHANGELOG в подпапке находится (регресс: 6 пустых релизов base-repo)"
 D="$SANDBOX/t41"; mkdir -p "$D"
 make_zip "$D" "sub-repo" "1.0.0" dot
 tmp="$(mktemp -d)"; ( cd "$tmp" && unzip -qo "$D/sub-repo-v1.0.0.zip" )
@@ -561,7 +570,7 @@ assert_eq "заголовок с тезисом собран" \
   "$(cat "$GH_STORE/rel/sub-repo/v1.0.0/title" 2>/dev/null)" "sub-repo v1.0.0 — Тезис версии 1.0.0"
 assert_contains "тело из CHANGELOG подпапки" "$(cat "$GH_STORE/rel/sub-repo/v1.0.0/body" 2>/dev/null)" "Опорный абзац"
 
-case_ "42. CHANGELOG глубоко в дереве — тоже находится"
+case_ "D4" "CHANGELOG глубоко в дереве — тоже находится"
 D="$SANDBOX/t42"; mkdir -p "$D"
 make_zip "$D" "deep-repo" "1.0.0" dot
 tmp="$(mktemp -d)"; ( cd "$tmp" && unzip -qo "$D/deep-repo-v1.0.0.zip" )
@@ -572,7 +581,7 @@ OUT="$(run_deploy "$D")"; rm -rf "$tmp"
 assert_eq "тезис вытащен из глубины" \
   "$(cat "$GH_STORE/rel/deep-repo/v1.0.0/title" 2>/dev/null)" "deep-repo v1.0.0 — Тезис версии 1.0.0"
 
-case_ "43. Нет секции в CHANGELOG — релиз НЕ создаётся, флаг поднят"
+case_ "D5" "Нет секции в CHANGELOG — релиз НЕ создаётся, флаг поднят"
 D="$SANDBOX/t43"; mkdir -p "$D"
 make_zip "$D" "norel-repo" "1.0.0" dot
 tmp="$(mktemp -d)"; ( cd "$tmp" && unzip -qo "$D/norel-repo-v1.0.0.zip" )
@@ -585,7 +594,7 @@ assert_contains "поднят громкий флаг" "$OUT" "ТРЕБУЕТ"
 git clone -q "$REMOTES/norel-repo.git" "$SANDBOX/c43" 2>/dev/null
 assert_eq "дерево и тег при этом на месте" "$(tag_tree_version "$SANDBOX/c43" 1.0.0)" "1.0.0"
 
-case_ "44. Старые релизы чинятся САМИ, одной командой (без флагов)"
+case_ "E6" "Старые релизы чинятся САМИ, одной командой (без флагов)"
 D="$SANDBOX/t44"; mkdir -p "$D"
 make_zip "$D" "old-repo" "1.0.0" dot
 make_zip "$D" "old-repo" "1.1.0" dot
@@ -617,7 +626,7 @@ OUT="$(AUDIT=1 run_deploy "$D")"
 assert_missing "повторный прогон не правит v1.0.0" "$OUT" "v1.0.0: заголовок и описание"
 assert_missing "повторный прогон не догружает ассет" "$OUT" "v1.0.0: ассет"
 
-case_ "45. FORCE не трогает описание, если секции в CHANGELOG нет"
+case_ "D6" "FORCE не трогает описание, если секции в CHANGELOG нет"
 # norel-repo из кейса 43: тег есть, CHANGELOG без секций, релиза нет.
 # Заводим релиз руками — имитация легаси-релиза, у которого нет источника описания.
 mkdir -p "$GH_STORE/rel/norel-repo/v1.0.0/assets"
@@ -631,7 +640,7 @@ assert_missing "нет ложной ошибки обновления" "$OUT" "�
 assert_eq "описание не затёрто пустым" "$(cat "$GH_STORE/rel/norel-repo/v1.0.0/body")" "$GOOD"
 assert_eq "заголовок тоже цел" "$(cat "$GH_STORE/rel/norel-repo/v1.0.0/title")" "norel-repo v1.0.0"
 
-case_ "46. Шапка секции нормализуется к канону [X.Y.Z]"
+case_ "D7" "Шапка секции нормализуется к канону [X.Y.Z]"
 D="$SANDBOX/t46"; mkdir -p "$D"
 make_zip "$D" "dial-repo" "3.3.2" dot
 tmp="$(mktemp -d)"; ( cd "$tmp" && unzip -qo "$D/dial-repo-v3.3.2.zip" )
@@ -643,7 +652,7 @@ assert_contains "тело начинается с канона" "$(head -1 "$GH_
 assert_eq "заголовок собран верно" \
   "$(cat "$GH_STORE/rel/dial-repo/v3.3.2/title")" "dial-repo v3.3.2 — Тезис без скобок"
 
-case_ "47. Дефолт быстрый: аудит старых релизов не запускается"
+case_ "E7" "Дефолт быстрый: аудит старых релизов не запускается"
 D="$SANDBOX/t47"; mkdir -p "$D"
 make_zip "$D" "fast-repo" "1.0.0" dot
 run_deploy "$D" >/dev/null
@@ -660,7 +669,7 @@ OUT="$(AUDIT=1 run_deploy "$D")"
 assert_eq "с AUDIT=1 починен" \
   "$(cat "$GH_STORE/rel/fast-repo/v1.0.0/title")" "fast-repo v1.0.0 — Тезис версии 1.0.0"
 
-case_ "48. ALL_REPOS=1 берёт репы из repos-map, даже без архива в папке"
+case_ "H4" "ALL_REPOS=1 берёт репы из repos-map, даже без архива в папке"
 MAPREMOTE="$REMOTES/base-repo.git"
 rm -rf "$SANDBOX/mapseed2"; git clone -q "$MAPREMOTE" "$SANDBOX/mapseed2" 2>/dev/null
 # заводим репу, у которой НЕТ архива в папке, но есть релиз не по стандарту
@@ -681,7 +690,7 @@ assert_contains "источник списка назван" "$OUT" "repos-map"
 assert_eq "её релиз приведён к стандарту" \
   "$(cat "$GH_STORE/rel/orphan-repo/v1.0.0/title")" "orphan-repo v1.0.0 — Тезис версии 1.0.0"
 
-case_ "49. DROP_LEGACY_ASSETS: снимает ТОЛЬКО дубль той же версии"
+case_ "F1" "DROP_LEGACY_ASSETS: снимает ТОЛЬКО дубль той же версии"
 D="$SANDBOX/t49"; mkdir -p "$D"
 make_zip "$D" "asset-repo" "6.6.0" dot
 run_deploy "$D" >/dev/null
@@ -705,7 +714,7 @@ assert_contains "zip чужой версии НЕ тронут" "$LEFT" "asset-r
 assert_contains "не-zip вложение НЕ тронуто" "$LEFT" "otchet.pdf"
 assert_contains "снятое названо в выводе" "$OUT" "снят дубль"
 
-case_ "50. Без флага не удаляется НИЧЕГО"
+case_ "G3" "Без флага не удаляется НИЧЕГО"
 D="$SANDBOX/t50"; mkdir -p "$D"
 make_zip "$D" "keep-repo" "1.0.0" dot
 run_deploy "$D" >/dev/null
@@ -719,7 +728,7 @@ assert_eq "даже при AUDIT+FORCE не изменился" "$(ls -1 "$A" | 
 OUT="$(DRY=1 DROP_LEGACY_ASSETS=1 run_deploy "$D")"
 assert_eq "DRY ничего не удаляет" "$(ls -1 "$A" | sort | tr '\n' ' ')" "$BEFORE"
 
-case_ "51. Нет канонического ассета — чистка не запускается"
+case_ "F2" "Нет канонического ассета — чистка не запускается"
 D="$SANDBOX/t51"; mkdir -p "$D"
 make_zip "$D" "guard-repo" "2.0.0" dot
 run_deploy "$D" >/dev/null
@@ -733,7 +742,7 @@ git -C "$SANDBOX/g51" push -q origin :refs/tags/v2.0.0 2>/dev/null   # и тег
 OUT="$(DROP_LEGACY_ASSETS=1 AUDIT=1 run_deploy "$D" || true)"
 assert_contains "легаси уцелел" "$(ls -1 "$A" | tr '\n' ' ')" "legacy_v2.0.0_old.zip"
 
-case_ "52. VERIFY: 'можно удалять' только когда на GitHub есть ВСЁ"
+case_ "G4" "VERIFY: 'можно удалять' только когда на GitHub есть ВСЁ"
 D="$SANDBOX/t52"; mkdir -p "$D"
 make_zip "$D" "vfy-repo" "1.0.0" dot
 run_deploy "$D" >/dev/null
@@ -757,14 +766,14 @@ rm -rf "$GH_STORE/rel/vfy-repo/v1.0.0"
 OUT="$(VERIFY=1 run_deploy "$D")"
 assert_contains "без релиза — держать" "$OUT" "ДЕРЖАТЬ"
 
-case_ "53. VERIFY не считает безопасным архив, которого нет в репе"
+case_ "G5" "VERIFY не считает безопасным архив, которого нет в репе"
 D="$SANDBOX/t53"; mkdir -p "$D"
 make_zip "$D" "never-repo" "9.9.9" dot     # никогда не публиковался
 OUT="$(VERIFY=1 run_deploy "$D" || true)"
 assert_contains "неопубликованный — держать" "$OUT" "ДЕРЖАТЬ"
 assert_missing "не объявлен безопасным" "$OUT" "never-repo-v9.9.9.zip — на GitHub есть всё"
 
-case_ "54. PRIVATE: новые репы приватные по умолчанию, публичные только явно"
+case_ "G6" "PRIVATE: новые репы приватные по умолчанию, публичные только явно"
 D="$SANDBOX/t54"; mkdir -p "$D"
 make_zip "$D" "priv-repo" "1.0.0" dot
 run_deploy "$D" >/dev/null
@@ -775,7 +784,7 @@ make_zip "$D" "pub-repo" "1.0.0" dot
 PRIVATE=0 run_deploy "$D" >/dev/null
 assert_eq "PRIVATE=0 → public" "$(cat "$GH_STORE/repos/pub-repo")" "public"
 
-case_ "55. Переопределяемые списки: SERVICE_RE, REPO_MAP, VARIANT_REPOS, MIN_FILES"
+case_ "E8" "Переопределяемые списки: SERVICE_RE, REPO_MAP, VARIANT_REPOS, MIN_FILES"
 D="$SANDBOX/t55"; mkdir -p "$D"
 make_zip "$D" "cfg-repo" "1.0.0" dot
 make_zip "$D" "junk-repo" "1.0.0" dot
@@ -797,7 +806,7 @@ make_zip "$D" "big-repo" "1.0.0" dot
 OUT="$(MIN_FILES=999 run_deploy "$D" || true)"
 assert_contains "MIN_FILES соблюдён" "$OUT" "не похоже на репу"
 
-case_ "56. ASSET=0 — релиз без ассета, дерево и тег на месте"
+case_ "E9" "ASSET=0 — релиз без ассета, дерево и тег на месте"
 D="$SANDBOX/t56"; mkdir -p "$D"
 make_zip "$D" "noasset-repo" "1.0.0" dot
 OUT="$(ASSET=0 run_deploy "$D")"
@@ -808,6 +817,27 @@ assert_contains "описание всё равно по стандарту" \
   "$(cat "$GH_STORE/rel/noasset-repo/v1.0.0/title")" "noasset-repo v1.0.0 — Тезис"
 
 # =============================================================================
+printf '\n\033[1m── Покрытие по зонам\033[0m\n'
+grp_name(){
+  case "$1" in
+    A) echo "Базовый цикл доставки";;      B) echo "Распознавание входа";;
+    C) echo "Предполёт и упаковка";;       D) echo "Описание релиза";;
+    E) echo "Режимы и конфигурация";;      F) echo "Ассеты";;
+    G) echo "Безопасность, необратимость";; H) echo "Карта репозиториев";;
+    I) echo "Окружение и совместимость";;  *) echo "$1";;
+  esac
+}
+for g in $(printf '%s\n' $G_LIST | sort); do
+  eval "_o=\${G_OK_$g:-0}; _b=\${G_BAD_$g:-0}"
+  # без колонок: printf считает БАЙТЫ, а кириллица многобайтовая — выравнивание врёт
+  _line="$(printf '  %s · %s — проверок: %s' "$g" "$(grp_name "$g")" "$_o")"
+  if [ "$_b" -gt 0 ]; then
+    printf '\033[31m%s  ✗ провалено %s\033[0m\n' "$_line" "$_b"
+  else
+    printf '\033[32m%s\033[0m\n' "$_line"
+  fi
+done
+
 printf '\n\033[1m── Итог\033[0m\n'
 printf '  \033[32mпройдено: %s\033[0m\n' "$PASS"
 if [ "$FAIL" -gt 0 ]; then printf '  \033[31mпровалено: %s\033[0m\n' "$FAIL"; exit 1; fi
