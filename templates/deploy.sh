@@ -83,6 +83,8 @@ SCRIPT_VERSION="2.0.0"
 DRY="${DRY:-0}"
 AUDIT="${AUDIT:-0}"          # 1 = полная ревизия ВСЕХ релизов (долго)
 VERIFY="${VERIFY:-0}"        # 1 = только проверка «что можно удалять локально»
+ALL_REPOS="${ALL_REPOS:-0}"  # 1 = взять ВСЕ репы из repos-map, а не только те, где есть архивы
+DROP_LEGACY_ASSETS="${DROP_LEGACY_ASSETS:-0}"  # 1 = удалять ассеты со старым неканоничным именем
 GH_TIMEOUT="${GH_TIMEOUT:-120}"   # секунд на один вызов gh — чтобы не висеть
 REPAIR="${REPAIR:-0}"
 FORCE="${FORCE:-0}"
@@ -341,6 +343,33 @@ fi
 
 REPOLIST="$(mktemp)"
 cut -f1 "$INDEX" | sort -u > "$REPOLIST"
+
+# ALL_REPOS=1: ревизия ВСЕХ реп системы, а не только тех, где нашлись архивы.
+# Список берём из repos-map.md (единственный реестр), фолбэк — gh repo list.
+if [ "$ALL_REPOS" = "1" ]; then
+  AUDIT=1
+  MAPSRC=""
+  for cand in "${BASE_REPO:-}" "$DIR/base-repo" "./base-repo" "$HOME/base-repo"; do
+    [ -n "$cand" ] && [ -f "$cand/repos-map.md" ] && { MAPSRC="$cand/repos-map.md"; break; }
+  done
+  if [ -z "$MAPSRC" ] && [ "$HAVE_GH" -eq 1 ]; then
+    _tmpmap="$(mktemp -d)/repos-map.md"
+    git clone -q --depth 1 "$REMOTE_BASE/base-repo.git" "$(dirname "$_tmpmap")/br" 2>/dev/null \
+      && [ -f "$(dirname "$_tmpmap")/br/repos-map.md" ] && MAPSRC="$(dirname "$_tmpmap")/br/repos-map.md"
+  fi
+  if [ -n "$MAPSRC" ]; then
+    # имена реп в карте — заголовки вида «## `repo-name`»
+    # Между решёткой и именем бывает что угодно (у авто-регистрации там 🆕),
+    # поэтому берём первое имя в бэктиках из любой строки-заголовка.
+    LC_ALL=C sed -nE 's/^#+[^`]*`([a-z0-9][a-z0-9._-]*)`.*/\1/p' "$MAPSRC" 2>/dev/null \
+      | sort -u >> "$REPOLIST"
+    cyn "  ALL_REPOS=1: список реп взят из repos-map.md"
+  elif [ "$HAVE_GH" -eq 1 ]; then
+    gh repo list "$OWNER" --limit 200 --json name --jq '.[].name' 2>/dev/null | sort -u >> "$REPOLIST"
+    ylw "  ALL_REPOS=1: карта не найдена, список взят из gh repo list"
+  fi
+  sort -u "$REPOLIST" -o "$REPOLIST"
+fi
 while IFS= read -r r; do
   [ -n "$r" ] || continue
   n="$(awk -F'\t' -v r="$r" '$1==r' "$INDEX" | wc -l | tr -d ' ')"
@@ -588,6 +617,19 @@ ensure_release(){
         git -C "$_cl" archive --format=zip --prefix="$_r-v$_v/" "v$_v" -o "$WORK/$_aname" 2>/dev/null && _src="тег"
       fi
       if [ -n "$_src" ] && [ -f "$WORK/$_aname" ]; then
+        # По §42 у релиза ровно 3 ассета. Ассеты со старым неканоничным именем
+        # остаются рядом с новым — сносим только по явному флагу, это необратимо.
+        if [ "$DROP_LEGACY_ASSETS" = "1" ]; then
+          gh_try release view "v$_v" --repo "$OWNER/$_r" --json assets --jq '.assets[].name' 2>/dev/null \
+            | while IFS= read -r _old; do
+                [ -n "$_old" ] || continue
+                [ "$_old" = "$_aname" ] && continue
+                case "$_old" in *.zip)
+                  gh_try release delete-asset "v$_v" "$_old" --repo "$OWNER/$_r" --yes >/dev/null 2>&1 \
+                    && ylw "    − v$_v: снят легаси-ассет $_old";;
+                esac
+              done
+        fi
         gh_try release upload "v$_v" "$WORK/$_aname" --repo "$OWNER/$_r" --clobber >/dev/null 2>&1 \
           && { grn "    ✓ v$_v: ассет $_aname догружен (из: $_src)"; note "$_r|v$_v|ассет|догружен ($_src)"; } \
           || { red "    ✗ v$_v: ассет не загрузился"; note "$_r|v$_v|ассет|✗ ошибка"; }

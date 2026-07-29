@@ -660,6 +660,27 @@ OUT="$(AUDIT=1 run_deploy "$D")"
 assert_eq "с AUDIT=1 починен" \
   "$(cat "$GH_STORE/rel/fast-repo/v1.0.0/title")" "fast-repo v1.0.0 — Тезис версии 1.0.0"
 
+case_ "48. ALL_REPOS=1 берёт репы из repos-map, даже без архива в папке"
+MAPREMOTE="$REMOTES/base-repo.git"
+rm -rf "$SANDBOX/mapseed2"; git clone -q "$MAPREMOTE" "$SANDBOX/mapseed2" 2>/dev/null
+# заводим репу, у которой НЕТ архива в папке, но есть релиз не по стандарту
+D2="$SANDBOX/t48seed"; mkdir -p "$D2"
+make_zip "$D2" "orphan-repo" "1.0.0" dot
+run_deploy "$D2" >/dev/null
+printf 'orphan-repo v1.0.0' > "$GH_STORE/rel/orphan-repo/v1.0.0/title"
+printf '## `orphan-repo`\nОписание.\n' >> "$SANDBOX/mapseed2/repos-map.md"
+( cd "$SANDBOX/mapseed2" && git add -A && git commit -q -m map && git push -q origin HEAD:main 2>/dev/null )
+# в рабочей папке — архив ДРУГОЙ репы
+D="$SANDBOX/t48"; mkdir -p "$D"
+make_zip "$D" "other48-repo" "1.0.0" dot
+OUT="$(run_deploy "$D")"
+assert_missing "без флага чужая репа не трогается" "$OUT" "══ Репозиторий: orphan-repo"
+OUT="$(ALL_REPOS=1 run_deploy "$D")"
+assert_contains "с ALL_REPOS=1 репа из карты взята" "$OUT" "orphan-repo"
+assert_contains "источник списка назван" "$OUT" "repos-map"
+assert_eq "её релиз приведён к стандарту" \
+  "$(cat "$GH_STORE/rel/orphan-repo/v1.0.0/title")" "orphan-repo v1.0.0 — Тезис версии 1.0.0"
+
 # =============================================================================
 printf '\n\033[1m── Итог\033[0m\n'
 printf '  \033[32mпройдено: %s\033[0m\n' "$PASS"
