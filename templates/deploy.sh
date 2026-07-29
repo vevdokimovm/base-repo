@@ -25,6 +25,7 @@
 # push_base_repo.sh, fix_releases.sh). Каждая из них умела свой кусок; здесь собран
 # объединённый рабочий процесс + починка того, что прежние версии делали не по стандарту.
 # Разбор консолидации: reports/merges/scripts_consolidation_report.md
+# Контракт (что гарантируется на выходе): templates/deploy-SPEC.md
 # Все режимы и ключи: templates/deploy-MODES.md
 #
 # ЧТО ДЕЛАЕТ (полный цикл, идемпотентно):
@@ -80,7 +81,7 @@ REMOTE_BASE="${REMOTE_BASE:-https://github.com/$OWNER}"   # переопреде
 MIN_FILES="${MIN_FILES:-5}"
 PRIVATE="${PRIVATE:-1}"
 ASSET="${ASSET:-1}"
-SCRIPT_VERSION="3.1.0"
+SCRIPT_VERSION="3.1.1"
 DRY="${DRY:-0}"
 AUDIT="${AUDIT:-0}"          # 1 = полная ревизия ВСЕХ релизов (долго)
 VERIFY="${VERIFY:-0}"        # 1 = только проверка «что можно удалять локально»
