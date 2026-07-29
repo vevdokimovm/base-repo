@@ -90,6 +90,11 @@ release)
   delete)
     [ -d "$d" ] || exit 1
     rm -rf "$d"; exit 0 ;;
+  delete-asset)
+    # gh release delete-asset <tag> <asset-name>
+    _asset="${4:-}"
+    [ -f "$d/assets/$_asset" ] || exit 1
+    rm -f "$d/assets/$_asset"; exit 0 ;;
   list)
     for t in $(ls -1 "$STORE/rel/$name" 2>/dev/null); do printf '%s\tRelease\t%s\n' "$t" "$t"; done
     exit 0 ;;

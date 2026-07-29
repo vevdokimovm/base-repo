@@ -681,6 +681,58 @@ assert_contains "источник списка назван" "$OUT" "repos-map"
 assert_eq "её релиз приведён к стандарту" \
   "$(cat "$GH_STORE/rel/orphan-repo/v1.0.0/title")" "orphan-repo v1.0.0 — Тезис версии 1.0.0"
 
+case_ "49. DROP_LEGACY_ASSETS: снимает ТОЛЬКО дубль той же версии"
+D="$SANDBOX/t49"; mkdir -p "$D"
+make_zip "$D" "asset-repo" "6.6.0" dot
+run_deploy "$D" >/dev/null
+A="$GH_STORE/rel/asset-repo/v6.6.0/assets"
+# рядом с каноническим кладём: дубль с точками, дубль с подчёркиваниями,
+# zip ДРУГОЙ версии и осмысленное вложение — последние два трогать нельзя
+echo x > "$A/finpilot_v6.6.0_intl.zip"
+echo x > "$A/finpilot_v6_6_0_intl.zip"
+echo x > "$A/asset-repo-v5.0.0.zip"
+echo x > "$A/otchet.pdf"
+# без режима ревизии флаг вхолостую — скрипт обязан об этом сказать
+OUT="$(DROP_LEGACY_ASSETS=1 run_deploy "$D")"
+assert_contains "предупреждение о бесполезном флаге" "$OUT" "без режима ревизии"
+assert_contains "дубль пока на месте" "$(ls -1 "$A" | tr '\n' ' ')" "finpilot_v6_6_0_intl.zip"
+OUT="$(DROP_LEGACY_ASSETS=1 AUDIT=1 run_deploy "$D")"
+LEFT="$(ls -1 "$A" | sort | tr '\n' ' ')"
+assert_missing "дубль с точками снят" "$LEFT" "finpilot_v6.6.0_intl.zip"
+assert_missing "дубль с подчёркиваниями снят" "$LEFT" "finpilot_v6_6_0_intl.zip"
+assert_contains "канонический ассет на месте" "$LEFT" "asset-repo-v6.6.0.zip"
+assert_contains "zip чужой версии НЕ тронут" "$LEFT" "asset-repo-v5.0.0.zip"
+assert_contains "не-zip вложение НЕ тронуто" "$LEFT" "otchet.pdf"
+assert_contains "снятое названо в выводе" "$OUT" "снят дубль"
+
+case_ "50. Без флага не удаляется НИЧЕГО"
+D="$SANDBOX/t50"; mkdir -p "$D"
+make_zip "$D" "keep-repo" "1.0.0" dot
+run_deploy "$D" >/dev/null
+A="$GH_STORE/rel/keep-repo/v1.0.0/assets"
+echo x > "$A/legacy_v1.0.0_intl.zip"
+BEFORE="$(ls -1 "$A" | sort | tr '\n' ' ')"
+OUT="$(run_deploy "$D")"
+assert_eq "состав ассетов не изменился" "$(ls -1 "$A" | sort | tr '\n' ' ')" "$BEFORE"
+OUT="$(AUDIT=1 FORCE=1 run_deploy "$D")"
+assert_eq "даже при AUDIT+FORCE не изменился" "$(ls -1 "$A" | sort | tr '\n' ' ')" "$BEFORE"
+OUT="$(DRY=1 DROP_LEGACY_ASSETS=1 run_deploy "$D")"
+assert_eq "DRY ничего не удаляет" "$(ls -1 "$A" | sort | tr '\n' ' ')" "$BEFORE"
+
+case_ "51. Нет канонического ассета — чистка не запускается"
+D="$SANDBOX/t51"; mkdir -p "$D"
+make_zip "$D" "guard-repo" "2.0.0" dot
+run_deploy "$D" >/dev/null
+A="$GH_STORE/rel/guard-repo/v2.0.0/assets"
+rm -f "$A/guard-repo-v2.0.0.zip"          # канонического нет
+echo x > "$A/legacy_v2.0.0_old.zip"        # остался только легаси
+rm -f "$D/guard-repo-v2.0.0.zip"           # и архива на диске тоже нет
+rm -rf "$SANDBOX/g51"; git clone -q "$REMOTES/guard-repo.git" "$SANDBOX/g51" 2>/dev/null
+git -C "$SANDBOX/g51" tag -d v2.0.0 >/dev/null 2>&1
+git -C "$SANDBOX/g51" push -q origin :refs/tags/v2.0.0 2>/dev/null   # и тега нет → собрать неоткуда
+OUT="$(DROP_LEGACY_ASSETS=1 AUDIT=1 run_deploy "$D" || true)"
+assert_contains "легаси уцелел" "$(ls -1 "$A" | tr '\n' ' ')" "legacy_v2.0.0_old.zip"
+
 # =============================================================================
 printf '\n\033[1m── Итог\033[0m\n'
 printf '  \033[32mпройдено: %s\033[0m\n' "$PASS"

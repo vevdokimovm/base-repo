@@ -386,6 +386,11 @@ if [ -n "$NONCANON" ]; then
   printf '%s\n' "$NONCANON" | sed '/^$/d'
 fi
 [ "$REPAIR" = "1" ] && cyn "  режим REPAIR: только приведение существующих релизов к стандарту"
+if [ "$DROP_LEGACY_ASSETS" = "1" ] && [ "$AUDIT" != "1" ] && [ "$REPAIR" != "1" ] && [ "$FORCE" != "1" ] && [ "$ALL_REPOS" != "1" ]; then
+  ylw "  ! DROP_LEGACY_ASSETS=1 без режима ревизии ничего не сделает:"
+  ylw "    уже опубликованные релизы в дефолтном режиме не обходятся."
+  ylw "    Добавь AUDIT=1 (или ALL_REPOS=1) — иначе флаг вхолостую."
+fi
 
 if [ "$DRY" = "1" ]; then
   ylw ""; ylw "DRY=1 — это только план, ничего не изменено. Убери DRY, чтобы выполнить."
@@ -611,7 +616,8 @@ ensure_release(){
 
   # ---- канонический ассет (§4: ровно 3 ассета) ---------------------------------
   if [ "$ASSET" = "1" ]; then
-    if ! gh_try release view "v$_v" --repo "$OWNER/$_r" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "$_aname"; then
+    _have="$(gh_try release view "v$_v" --repo "$OWNER/$_r" --json assets --jq '.assets[].name' 2>/dev/null)"
+    if ! printf '%s\n' "$_have" | grep -qx "$_aname"; then
       _src=""
       if [ -n "$_z" ] && [ -f "$_z" ]; then
         cp "$_z" "$WORK/$_aname"; _src="архив"
@@ -621,34 +627,45 @@ ensure_release(){
         git -C "$_cl" archive --format=zip --prefix="$_r-v$_v/" "v$_v" -o "$WORK/$_aname" 2>/dev/null && _src="тег"
       fi
       if [ -n "$_src" ] && [ -f "$WORK/$_aname" ]; then
-        # По §42 у релиза ровно 3 ассета. Ассеты со старым неканоничным именем
-        # остаются рядом с новым — сносим только по явному флагу, это необратимо.
-        if [ "$DROP_LEGACY_ASSETS" = "1" ]; then
-          gh_try release view "v$_v" --repo "$OWNER/$_r" --json assets --jq '.assets[].name' 2>/dev/null \
-            | while IFS= read -r _old; do
-                [ -n "$_old" ] || continue
-                [ "$_old" = "$_aname" ] && continue
-                # Сносим ТОЛЬКО архив той же версии под старым именем — это дубль
-                # канонического. Любые другие вложения не трогаем: там могут быть
-                # осмысленные файлы, а удаление ассета необратимо.
-                _vd="$(printf '%s' "$_v" | tr '.' '_')"
-                case "$_old" in
-                  *.zip)
-                    case "$_old" in
-                      *"$_v"*|*"$_vd"*)
-                        gh_try release delete-asset "v$_v" "$_old" --repo "$OWNER/$_r" --yes >/dev/null 2>&1 \
-                          && ylw "    − v$_v: снят дубль под старым именем — $_old" ;;
-                    esac ;;
-                esac
-              done
-        fi
         gh_try release upload "v$_v" "$WORK/$_aname" --repo "$OWNER/$_r" --clobber >/dev/null 2>&1 \
           && { grn "    ✓ v$_v: ассет $_aname догружен (из: $_src)"; note "$_r|v$_v|ассет|догружен ($_src)"; } \
           || { red "    ✗ v$_v: ассет не загрузился"; note "$_r|v$_v|ассет|✗ ошибка"; }
         rm -f "$WORK/$_aname"
       fi
     fi
+
+    # ---- чистка дублей под старым именем (необратимо, только по флагу) ---------
+    # ВАЖНО: отдельным блоком ПОСЛЕ загрузки и только если канонический ассет
+    # реально лежит на релизе. Иначе при сбое сети можно снести единственную копию
+    # и не суметь положить замену.
+    if [ "$DROP_LEGACY_ASSETS" = "1" ]; then
+      _now="$(gh_try release view "v$_v" --repo "$OWNER/$_r" --json assets --jq '.assets[].name' 2>/dev/null)"
+      if printf '%s\n' "$_now" | grep -qx "$_aname"; then
+        _vd="$(printf '%s' "$_v" | tr '.' '_')"
+        printf '%s\n' "$_now" | while IFS= read -r _old; do
+          [ -n "$_old" ] || continue
+          [ "$_old" = "$_aname" ] && continue
+          # Сносим ТОЛЬКО zip той же версии под старым именем — это дубль
+          # канонического. Всё остальное (pdf, отчёты, архивы других версий)
+          # не трогаем: удаление ассета необратимо.
+          case "$_old" in *.zip) : ;; *) continue ;; esac
+          case "$_old" in
+            *"$_v"*|*"$_vd"*)
+              if [ "$DRY" = "1" ]; then
+                ylw "    − v$_v: снял бы дубль $_old (DRY)"
+              else
+                gh_try release delete-asset "v$_v" "$_old" --repo "$OWNER/$_r" --yes >/dev/null 2>&1 \
+                  && { ylw "    − v$_v: снят дубль под старым именем — $_old"; note "$_r|v$_v|ассет|снят дубль $_old"; } \
+                  || { red "    ✗ v$_v: не удалось снять $_old"; note "$_r|v$_v|ассет|✗ снятие"; }
+              fi ;;
+          esac
+        done
+      else
+        ylw "    ~ v$_v: канонического ассета нет — чистку дублей пропускаю"
+      fi
+    fi
   fi
+
 }
 
 # --- ШАГ 2. Обработка каждой репы ------------------------------------------------
