@@ -1015,6 +1015,49 @@ assert_contains "зеркало названо в выводе" "$OUT" "расп
 [ ! -d "$D/deepmir-repo-v1.0.0" ] && ok "VERSION на глубине 2 найден" || bad "VERSION на глубине 2 найден"
 [ -d "$D/dgmir-repo-v1.0.0/inner/.git" ] && ok "git-клон на глубине 2 цел" || bad "git-клон на глубине 2 цел"
 
+case_ "C12" ".repo-id: несовпадение с целевой репой останавливает публикацию"
+D="$SANDBOX/tC12"; mkdir -p "$D"
+make_zip "$D" "rid-repo" "1.0.0" dot
+tmp="$(mktemp -d)"; ( cd "$tmp" && unzip -qo "$D/rid-repo-v1.0.0.zip" )
+printf 'testuser/СОВСЕМ-ДРУГАЯ\n' > "$tmp/rid-repo-v1.0.0/.repo-id"
+rm "$D/rid-repo-v1.0.0.zip"; ( cd "$tmp" && zip -qr "$D/rid-repo-v1.0.0.zip" . ); rm -rf "$tmp"
+OUT="$(KEEP_ARCHIVES=1 run_deploy "$D" || true)"
+assert_contains "несовпадение названо" "$OUT" ".repo-id"
+assert_contains "поднят громкий флаг" "$OUT" "ТРЕБУЕТ"
+[ ! -d "$REMOTES/rid-repo.git" ] && ok "репа не создана" || bad "репа не создана"
+# правильный .repo-id — публикация идёт, предупреждения нет
+D2="$SANDBOX/tC12b"; mkdir -p "$D2"
+make_zip "$D2" "rid2-repo" "1.0.0" dot
+tmp="$(mktemp -d)"; ( cd "$tmp" && unzip -qo "$D2/rid2-repo-v1.0.0.zip" )
+printf 'testuser/rid2-repo\n' > "$tmp/rid2-repo-v1.0.0/.repo-id"
+rm "$D2/rid2-repo-v1.0.0.zip"; ( cd "$tmp" && zip -qr "$D2/rid2-repo-v1.0.0.zip" . ); rm -rf "$tmp"
+OUT="$(KEEP_ARCHIVES=1 run_deploy "$D2")"
+assert_missing "нет напоминания про отсутствие" "$OUT" "нет .repo-id"
+git clone -q "$REMOTES/rid2-repo.git" "$SANDBOX/cC12" 2>/dev/null
+assert_eq "версия опубликована" "$(tag_tree_version "$SANDBOX/cC12" 1.0.0)" "1.0.0"
+# без .repo-id — только напоминание, публикация не блокируется
+D3="$SANDBOX/tC12c"; mkdir -p "$D3"
+make_zip "$D3" "rid3-repo" "1.0.0" dot
+OUT="$(KEEP_ARCHIVES=1 run_deploy "$D3")"
+assert_contains "напоминание есть" "$OUT" "нет .repo-id"
+[ -d "$REMOTES/rid3-repo.git" ] && ok "но публикация прошла" || bad "но публикация прошла"
+
+case_ "G14" "Зеркало опознаётся по .repo-id на глубине 3, как бы ни звалась папка"
+D="$SANDBOX/tG14"; mkdir -p "$D"
+make_zip "$D" "deep3-repo" "1.0.0" dot
+KEEP_ARCHIVES=1 run_deploy "$D" >/dev/null
+# структура как у распаковщика macOS с внутренней обёрткой: три уровня до маркеров
+mkdir -p "$D/deep3-repo-v1.0.0/wrap/inner"
+printf 'testuser/deep3-repo\n' > "$D/deep3-repo-v1.0.0/wrap/inner/.repo-id"
+printf '1.0.0' > "$D/deep3-repo-v1.0.0/wrap/inner/VERSION"
+OUT="$(KEEP_ARCHIVES=0 run_deploy "$D")"
+[ ! -d "$D/deep3-repo-v1.0.0" ] && ok "зеркало на глубине 3 убрано" || bad "зеркало на глубине 3 убрано"
+# ни .repo-id, ни VERSION — сообщение объясняет, где искали
+mkdir -p "$D/nomark-repo-v1.0.0/x"
+OUT="$(KEEP_ARCHIVES=0 run_deploy "$D" || true)"
+assert_contains "сказано про оба маркера" "$OUT" "ни .repo-id, ни VERSION"
+[ -d "$D/nomark-repo-v1.0.0" ] && ok "без маркеров каталог цел" || bad "без маркеров каталог цел"
+
 # =============================================================================
 printf '\n\033[1m── Покрытие по зонам\033[0m\n'
 grp_name(){

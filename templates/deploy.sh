@@ -90,7 +90,7 @@ REMOTE_BASE="${REMOTE_BASE:-https://github.com/$OWNER}"   # переопреде
 MIN_FILES="${MIN_FILES:-5}"
 PRIVATE="${PRIVATE:-1}"
 ASSET="${ASSET:-1}"
-SCRIPT_VERSION="4.2.1"
+SCRIPT_VERSION="4.3.0"
 DRY="${DRY:-0}"
 AUDIT="${AUDIT:-0}"          # 1 = полная ревизия ВСЕХ релизов (долго)
 VERIFY="${VERIFY:-0}"        # 1 = только проверка «что можно удалять локально»
@@ -286,6 +286,23 @@ cleanup_work(){
   exit "$_rc"
 }
 
+# Опознавательный знак репы: файл .repo-id со строкой `owner/repo`.
+# Ищется на глубине 1..3 — распаковщики macOS добавляют уровни обёрток, и угадывать
+# структуру по именам каталогов бессмысленно. Возвращает имя репы или пусто.
+find_repo_id(){
+  _rid="$(find "$1" -maxdepth 3 -name '.repo-id' -type f -print 2>/dev/null | head -1)"
+  [ -n "$_rid" ] || return 1
+  _line="$(head -1 "$_rid" | tr -d ' \t\r\n')"
+  case "$_line" in */*) printf '%s' "${_line#*/}" ;; *) printf '%s' "$_line" ;; esac
+}
+
+# Версия из дерева: VERSION на глубине 1..3 по той же причине.
+find_version_file(){
+  _vf="$(find "$1" -maxdepth 3 -name 'VERSION' -type f -print 2>/dev/null | head -1)"
+  [ -n "$_vf" ] || return 1
+  tr -d ' \t\r\n' < "$_vf"
+}
+
 # Полностью ли версия опубликована: тег на remote + релиз + канонический ассет.
 # Одна функция на VERIFY и на DELETE_AFTER — иначе они разъедутся.
 # Печатает список недостающего; пусто = всё на месте.
@@ -331,14 +348,11 @@ cleanup_mirrors(){
     [ -d "$_cand/.git" ] && { ylw "  ~ $_cb/ — git-клон, не трогаю"; continue; }
     # VERSION ищем в корне И на уровень глубже: macOS распаковывает foo.zip в папку
     # foo/, а внутри архива уже есть обёртка — VERSION оказывается на глубине 2.
-    _cver=""
-    if [ -f "$_cand/VERSION" ]; then
-      _cver="$(tr -d ' \n\r' < "$_cand/VERSION")"
-    else
-      _vf="$(find "$_cand" -mindepth 2 -maxdepth 2 -name VERSION -type f -print 2>/dev/null | head -1)"
-      [ -n "$_vf" ] && _cver="$(tr -d ' \n\r' < "$_vf")"
-    fi
-    [ -n "$_cver" ] || { ylw "  ~ $_cb/ — нет VERSION, не трогаю"; continue; }
+    # .repo-id — надёжное опознание: не зависит ни от имени каталога, ни от глубины
+    _rid_repo="$(find_repo_id "$_cand" || true)"
+    [ -n "$_rid_repo" ] && _cr="$_rid_repo"
+    _cver="$(find_version_file "$_cand" || true)"
+    [ -n "$_cver" ] || { ylw "  ~ $_cb/ — нет ни .repo-id, ни VERSION (до 3 уровней) — не трогаю"; continue; }
     [ "$_cver" = "$_cv" ] || { ylw "  ~ $_cb/ — VERSION=$_cver ≠ $_cv, не трогаю"; continue; }
     # .git может быть тоже на уровень глубже
     if [ -e "$_cand/.git" ] \
@@ -667,6 +681,20 @@ for z in "$DIR"/*.zip; do
   if ! printf '%s\n' "$_ent" | LC_ALL=C grep -qE '(^|/)README\.md$'; then
     red "  ✗ $base.zip — корень не опознан (нет README.md) — пропускаю"; continue
   fi
+  # .repo-id читаем ПРЯМО ИЗ ZIP, до создания репы: иначе при несовпадении
+  # успевала завестись пустая репа-сирота (кейс C12).
+  _ridpath="$(printf '%s\n' "$_ent" | LC_ALL=C grep -E '(^|/)\.repo-id$' | head -1)"
+  if [ -n "$_ridpath" ]; then
+    _ridval="$(unzip -p "$z" "$_ridpath" 2>/dev/null | head -1 | tr -d ' \t\r\n')"
+    _ridrepo="${_ridval#*/}"
+    # Сравниваем с ЦЕЛЕВОЙ репой (после REPO_MAP): у finpilot имя архива и репа
+    # намеренно разные, и это не ошибка.
+    if [ -n "$_ridrepo" ] && [ "$_ridrepo" != "$name" ]; then
+      red "  ✗ $base.zip — .repo-id внутри указывает на «$_ridrepo», целевая репа «$name» — пропускаю"
+      loud "$base.zip: .repo-id=$_ridrepo ≠ $name. Архив уехал бы не в ту репу."
+      continue
+    fi
+  fi
   # VERSION берём СТРОГО корневой. Глоб '*/VERSION' ловил ещё и вложенные репы
   # (base-repo внутри dota-dossier) и склеивал их содержимое: "1.13.0"+"2.13.0".
   _roots="$(printf '%s\n' "$_ent" | LC_ALL=C cut -d/ -f1 | LC_ALL=C sort -u | LC_ALL=C grep -c .)"
@@ -955,6 +983,22 @@ while IFS= read -r REPO; do
     # маркеры корня — ДО любого деструктива
     if [ ! -f "$SRC/README.md" ]; then
       red "  корень не опознан (нет README.md) — пропускаю"; note "$REPO|v$VER|проверка|✗ нет README"; continue
+    fi
+    # .repo-id — принадлежность архива. Если файл есть и указывает на ДРУГУЮ репу,
+    # это стоп: значит архив уехал бы не туда (переименовали, ошиблись в REPO_MAP).
+    # Файла нет — пока только напоминание: старые репы его ещё не завели.
+    _aid="$(find_repo_id "$SRC" || true)"
+    if [ -n "$_aid" ]; then
+      if [ "$_aid" != "$REPO" ]; then
+        red "  ✗ .repo-id внутри архива указывает на «$_aid», а публикуем в «$REPO» — СТОП"
+        loud "$REPO v$VER: .repo-id=$_aid ≠ целевая репа. Архив уехал бы не туда."
+        note "$REPO|v$VER|проверка|✗ .repo-id не совпал"; continue
+      fi
+    else
+      ylw "    нет .repo-id — принадлежность архива не подтверждена (см. §48)"
+      note "$REPO|v$VER|проверка|~ нет .repo-id"
+    fi
+    if false; then :
     fi
     SRC_N=$(find "$SRC" -type f | wc -l | tr -d ' ')
     if [ "$SRC_N" -lt "$MIN_FILES" ]; then
