@@ -25,6 +25,8 @@
 # push_base_repo.sh, fix_releases.sh). Каждая из них умела свой кусок; здесь собран
 # объединённый рабочий процесс + починка того, что прежние версии делали не по стандарту.
 # Разбор консолидации: reports/merges/scripts_consolidation_report.md
+# ПЕРЕД ПРАВКОЙ ПОВЕДЕНИЯ: reports/incidents/PITFALLS.md — лидерборд повторяющихся
+#   дефектов со счётчиками. Класс с 3+ повторами лечится проверкой, не заплаткой.
 # Контракт (что гарантируется на выходе): templates/deploy-SPEC.md
 # Все режимы и ключи: templates/deploy-MODES.md
 #
@@ -70,6 +72,13 @@
 # =============================================================================
 
 set -u
+# zsh по умолчанию считает несовпавший шаблон фатальной ошибкой и обрывает скрипт
+# (bash оставляет шаблон строкой). Скрипт запускают в zsh, тесты идут в bash —
+# различие того же класса, что BSD/GNU. Снимаем фатальность сразу на входе.
+if [ -n "${ZSH_VERSION:-}" ]; then
+  setopt no_nomatch 2>/dev/null || true
+  setopt sh_word_split 2>/dev/null || true
+fi
 if [ -n "${ZSH_VERSION:-}" ]; then setopt shwordsplit 2>/dev/null || true; fi
 
 SELF_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
@@ -81,7 +90,7 @@ REMOTE_BASE="${REMOTE_BASE:-https://github.com/$OWNER}"   # переопреде
 MIN_FILES="${MIN_FILES:-5}"
 PRIVATE="${PRIVATE:-1}"
 ASSET="${ASSET:-1}"
-SCRIPT_VERSION="4.2.0"
+SCRIPT_VERSION="4.2.1"
 DRY="${DRY:-0}"
 AUDIT="${AUDIT:-0}"          # 1 = полная ревизия ВСЕХ релизов (долго)
 VERIFY="${VERIFY:-0}"        # 1 = только проверка «что можно удалять локально»
@@ -307,7 +316,8 @@ cleanup_mirrors(){
   #   3) внутри НЕТ .git — иначе это рабочий клон, а не распакованный архив;
   #   4) версия полностью на GitHub (тег + релиз + ассет).
   # Каталог без версии в имени (`personal-finance-dss`) не рассматривается вовсе.
-  for _cand in "$DIR"/*; do
+  # find вместо glob: в zsh несовпавший шаблон роняет скрипт целиком
+  find "$DIR" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null | while IFS= read -r _cand; do
     [ -d "$_cand" ] || continue
     _cb="$(basename "$_cand")"
     _cp="$(printf '%s' "$_cb" | sed -E 's/[-_](intl|international|ru|en)$//' \
@@ -322,22 +332,27 @@ cleanup_mirrors(){
     # VERSION ищем в корне И на уровень глубже: macOS распаковывает foo.zip в папку
     # foo/, а внутри архива уже есть обёртка — VERSION оказывается на глубине 2.
     _cver=""
-    for _vf in "$_cand/VERSION" "$_cand"/*/VERSION; do
-      [ -f "$_vf" ] || continue
-      _cver="$(tr -d ' \n\r' < "$_vf")"; break
-    done
+    if [ -f "$_cand/VERSION" ]; then
+      _cver="$(tr -d ' \n\r' < "$_cand/VERSION")"
+    else
+      _vf="$(find "$_cand" -mindepth 2 -maxdepth 2 -name VERSION -type f -print 2>/dev/null | head -1)"
+      [ -n "$_vf" ] && _cver="$(tr -d ' \n\r' < "$_vf")"
+    fi
     [ -n "$_cver" ] || { ylw "  ~ $_cb/ — нет VERSION, не трогаю"; continue; }
     [ "$_cver" = "$_cv" ] || { ylw "  ~ $_cb/ — VERSION=$_cver ≠ $_cv, не трогаю"; continue; }
     # .git может быть тоже на уровень глубже
-    for _g in "$_cand/.git" "$_cand"/*/.git; do
-      [ -e "$_g" ] && { ylw "  ~ $_cb/ — git-клон внутри, не трогаю"; _cver=""; break; }
-    done
-    [ -n "$_cver" ] || continue
+    if [ -e "$_cand/.git" ] \
+       || [ -n "$(find "$_cand" -mindepth 2 -maxdepth 2 -name .git -print 2>/dev/null | head -1)" ]; then
+      ylw "  ~ $_cb/ — git-клон внутри, не трогаю"; continue
+    fi
     _mm="$(missing_parts "$_cr" "$_cv")"
     [ -z "$_mm" ] || { ylw "  ~ $_cb/ — на GitHub не хватает:$_mm — не трогаю"; continue; }
     rm -rf "$_cand" && { grn "  − $_cb/ (распакованное зеркало)"
-                         note "$_cr|v$_cv|папка|удалена локально"; MIR_DEL=$((MIR_DEL+1)); }
+                         note "$_cr|v$_cv|папка|удалена локально"
+                         # тело while в пайпе — сабшелл, счётчик наружу не выходит
+                         echo x >> "$WORK/.mirdel"; }
   done
+  [ -f "$WORK/.mirdel" ] && MIR_DEL=$(grep -c . "$WORK/.mirdel")
   return 0
 }
 
@@ -547,6 +562,14 @@ ensure_release(){
 
 }
 
+
+# Рабочая папка — во ВРЕМЕННОЙ директории, не в Downloads: сюда клонируются все репы,
+# и один прогон легко даёт несколько гигабайт. Раньше лежала в Downloads и оставалась
+# после каждого Ctrl+C — так и кончилось место на диске.
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/repo_deploy_XXXXXX")"
+# Уборка при ЛЮБОМ выходе: нормальном, по ошибке, по Ctrl+C. Раньше стояла последней
+# строкой скрипта, и до неё просто не доходило.
+trap cleanup_work EXIT INT TERM
 
 # --- ШАГ 1. Инвентаризация архивов ----------------------------------------------
 _free_mb="$(df -Pm "${TMPDIR:-/tmp}" 2>/dev/null | awk 'NR==2{print $4}')"
@@ -801,13 +824,6 @@ if [ "$VERIFY" = "1" ]; then
   rm -f "$INDEX" "$REPOLIST" "$PARSER"; exit 0
 fi
 
-# Рабочая папка — во ВРЕМЕННОЙ директории, не в Downloads: сюда клонируются все репы,
-# и один прогон легко даёт несколько гигабайт. Раньше лежала в Downloads и оставалась
-# после каждого Ctrl+C — так и кончилось место на диске.
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/repo_deploy_XXXXXX")"
-# Уборка при ЛЮБОМ выходе: нормальном, по ошибке, по Ctrl+C. Раньше стояла последней
-# строкой скрипта, и до неё просто не доходило.
-trap cleanup_work EXIT INT TERM
 mkdir -p "$WORK" || die "mkdir $WORK"
 NEW_REPOS=""
 
