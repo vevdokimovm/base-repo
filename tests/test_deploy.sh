@@ -1058,6 +1058,34 @@ OUT="$(KEEP_ARCHIVES=0 run_deploy "$D" || true)"
 assert_contains "сказано про оба маркера" "$OUT" "ни .repo-id, ни VERSION"
 [ -d "$D/nomark-repo-v1.0.0" ] && ok "без маркеров каталог цел" || bad "без маркеров каталог цел"
 
+case_ "C13" "Маркер вложенной репы не подменяет корневой"
+D="$SANDBOX/tC13"; mkdir -p "$D"
+make_zip "$D" "outer-repo" "1.0.0" dot
+tmp="$(mktemp -d)"; ( cd "$tmp" && unzip -qo "$D/outer-repo-v1.0.0.zip" )
+W="$tmp/outer-repo-v1.0.0"
+printf 'testuser/outer-repo\n' > "$W/.repo-id"
+printf '1.0.0' > "$W/VERSION"
+# вложенная репа со СВОИМИ маркерами — как base-repo внутри dota-dossier
+mkdir -p "$W/nested-repo"
+printf 'testuser/nested-repo\n' > "$W/nested-repo/.repo-id"
+printf '9.9.9' > "$W/nested-repo/VERSION"
+echo '# nested' > "$W/nested-repo/README.md"
+rm "$D/outer-repo-v1.0.0.zip"; ( cd "$tmp" && zip -qr "$D/outer-repo-v1.0.0.zip" . ); rm -rf "$tmp"
+OUT="$(KEEP_ARCHIVES=1 run_deploy "$D")"
+assert_missing "не спутал с вложенной репой" "$OUT" "указывает на «nested-repo»"
+assert_missing "и не считает маркер отсутствующим" "$OUT" "нет .repo-id"
+git clone -q "$REMOTES/outer-repo.git" "$SANDBOX/cC13" 2>/dev/null
+assert_eq "версия опубликована" "$(tag_tree_version "$SANDBOX/cC13" 1.0.0)" "1.0.0"
+[ ! -d "$REMOTES/nested-repo.git" ] && ok "вложенная репа не создана" || bad "вложенная репа не создана"
+# то же при уборке зеркала: корневой маркер должен победить
+mkdir -p "$D/outer-repo-v1.0.0/nested-repo"
+printf 'testuser/outer-repo\n' > "$D/outer-repo-v1.0.0/.repo-id"
+printf '1.0.0' > "$D/outer-repo-v1.0.0/VERSION"
+printf 'testuser/nested-repo\n' > "$D/outer-repo-v1.0.0/nested-repo/.repo-id"
+printf '9.9.9' > "$D/outer-repo-v1.0.0/nested-repo/VERSION"
+OUT="$(KEEP_ARCHIVES=0 run_deploy "$D")"
+[ ! -d "$D/outer-repo-v1.0.0" ] && ok "зеркало убрано по корневому маркеру" || bad "зеркало убрано по корневому маркеру"
+
 # =============================================================================
 printf '\n\033[1m── Покрытие по зонам\033[0m\n'
 grp_name(){

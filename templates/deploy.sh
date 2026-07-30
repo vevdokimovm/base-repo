@@ -90,7 +90,7 @@ REMOTE_BASE="${REMOTE_BASE:-https://github.com/$OWNER}"   # переопреде
 MIN_FILES="${MIN_FILES:-5}"
 PRIVATE="${PRIVATE:-1}"
 ASSET="${ASSET:-1}"
-SCRIPT_VERSION="4.3.0"
+SCRIPT_VERSION="4.3.1"
 DRY="${DRY:-0}"
 AUDIT="${AUDIT:-0}"          # 1 = полная ревизия ВСЕХ релизов (долго)
 VERIFY="${VERIFY:-0}"        # 1 = только проверка «что можно удалять локально»
@@ -290,7 +290,12 @@ cleanup_work(){
 # Ищется на глубине 1..3 — распаковщики macOS добавляют уровни обёрток, и угадывать
 # структуру по именам каталогов бессмысленно. Возвращает имя репы или пусто.
 find_repo_id(){
-  _rid="$(find "$1" -maxdepth 3 -name '.repo-id' -type f -print 2>/dev/null | head -1)"
+  # По уровням сверху вниз: маркер вложенной репы не должен выигрывать у корневого.
+  _rid=""
+  for _d in 1 2 3; do
+    _rid="$(find "$1" -mindepth "$_d" -maxdepth "$_d" -name '.repo-id' -type f -print 2>/dev/null | head -1)"
+    [ -n "$_rid" ] && break
+  done
   [ -n "$_rid" ] || return 1
   _line="$(head -1 "$_rid" | tr -d ' \t\r\n')"
   case "$_line" in */*) printf '%s' "${_line#*/}" ;; *) printf '%s' "$_line" ;; esac
@@ -298,7 +303,11 @@ find_repo_id(){
 
 # Версия из дерева: VERSION на глубине 1..3 по той же причине.
 find_version_file(){
-  _vf="$(find "$1" -maxdepth 3 -name 'VERSION' -type f -print 2>/dev/null | head -1)"
+  _vf=""
+  for _d in 1 2 3; do
+    _vf="$(find "$1" -mindepth "$_d" -maxdepth "$_d" -name 'VERSION' -type f -print 2>/dev/null | head -1)"
+    [ -n "$_vf" ] && break
+  done
   [ -n "$_vf" ] || return 1
   tr -d ' \t\r\n' < "$_vf"
 }
@@ -681,9 +690,17 @@ for z in "$DIR"/*.zip; do
   if ! printf '%s\n' "$_ent" | LC_ALL=C grep -qE '(^|/)README\.md$'; then
     red "  ✗ $base.zip — корень не опознан (нет README.md) — пропускаю"; continue
   fi
+  _roots0="$(printf '%s\n' "$_ent" | LC_ALL=C cut -d/ -f1 | LC_ALL=C sort -u | LC_ALL=C grep -c .)"
   # .repo-id читаем ПРЯМО ИЗ ZIP, до создания репы: иначе при несовпадении
   # успевала завестись пустая репа-сирота (кейс C12).
-  _ridpath="$(printf '%s\n' "$_ent" | LC_ALL=C grep -E '(^|/)\.repo-id$' | head -1)"
+  # СТРОГО корневой: в dota-dossier вложена base-repo со своим .repo-id, и первый
+  # найденный файл принадлежал вложенной репе. Та же ловушка, что была с VERSION.
+  if [ "$_roots0" = "1" ]; then
+    _ridpath="$(printf '%s\n' "$_ent" | LC_ALL=C grep -xE '[^/]+/\.repo-id')"
+  else
+    _ridpath="$(printf '%s\n' "$_ent" | LC_ALL=C grep -x '\.repo-id')"
+  fi
+  _ridpath="$(printf '%s\n' "$_ridpath" | head -1)"
   if [ -n "$_ridpath" ]; then
     _ridval="$(unzip -p "$z" "$_ridpath" 2>/dev/null | head -1 | tr -d ' \t\r\n')"
     _ridrepo="${_ridval#*/}"
