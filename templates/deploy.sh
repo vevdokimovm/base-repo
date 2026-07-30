@@ -81,7 +81,7 @@ REMOTE_BASE="${REMOTE_BASE:-https://github.com/$OWNER}"   # переопреде
 MIN_FILES="${MIN_FILES:-5}"
 PRIVATE="${PRIVATE:-1}"
 ASSET="${ASSET:-1}"
-SCRIPT_VERSION="4.1.0"
+SCRIPT_VERSION="4.1.1"
 DRY="${DRY:-0}"
 AUDIT="${AUDIT:-0}"          # 1 = полная ревизия ВСЕХ релизов (долго)
 VERIFY="${VERIFY:-0}"        # 1 = только проверка «что можно удалять локально»
@@ -278,6 +278,42 @@ missing_parts(){
       | grep -Fxq "$_mr-v$_mv.zip" || _miss="$_miss ассет"
   fi
   printf '%s' "$_miss"
+}
+
+# Уборка распакованных зеркал. Вынесена в функцию, потому что нужна на ДВУХ путях:
+# обычный прогон и ранний выход «архивов нет» — во втором случае зеркала всё равно
+# могут лежать на диске, и их надо убрать.
+cleanup_mirrors(){
+  [ "$DELETE_AFTER" = "1" ] && [ "$HAVE_GH" -eq 1 ] || return 0
+  # Распакованные зеркала. Каталоги ищем В ПАПКЕ НАПРЯМУЮ, а не по списку архивов
+  # этого прогона: архив мог быть удалён раньше, а распакованная копия осталась.
+  # Удаляем только доказуемую копию — все условия обязательны:
+  #   1) имя разбирается как <repo>-vX.Y.Z (точки или подчёркивания, постфикс сборки);
+  #   2) внутри есть VERSION и он совпадает с версией из имени;
+  #   3) внутри НЕТ .git — иначе это рабочий клон, а не распакованный архив;
+  #   4) версия полностью на GitHub (тег + релиз + ассет).
+  # Каталог без версии в имени (`personal-finance-dss`) не рассматривается вовсе.
+  for _cand in "$DIR"/*; do
+    [ -d "$_cand" ] || continue
+    _cb="$(basename "$_cand")"
+    _cp="$(printf '%s' "$_cb" | sed -E 's/[-_](intl|international|ru|en)$//' \
+           | sed -nE 's/^(.+)[-_. ]v?([0-9]+)[._-]([0-9]+)[._-]([0-9]+)$/\1\t\2.\3.\4/p')"
+    [ -n "$_cp" ] || continue
+    _cr="$(printf '%s' "$_cp" | cut -f1)"; _cv="$(printf '%s' "$_cp" | cut -f2)"
+    case " $VARIANT_REPOS " in *" $_cr "*) : ;; esac
+    for _m in $REPO_MAP; do
+      case "$_m" in "$_cr="*) _cr="${_m#*=}" ;; esac
+    done
+    [ -d "$_cand/.git" ] && { ylw "  ~ $_cb/ — git-клон, не трогаю"; continue; }
+    [ -f "$_cand/VERSION" ] || { ylw "  ~ $_cb/ — нет VERSION, не трогаю"; continue; }
+    [ "$(tr -d ' \n\r' < "$_cand/VERSION")" = "$_cv" ] || {
+      ylw "  ~ $_cb/ — VERSION не совпал, не трогаю"; continue; }
+    _mm="$(missing_parts "$_cr" "$_cv")"
+    [ -z "$_mm" ] || { ylw "  ~ $_cb/ — на GitHub не хватает:$_mm — не трогаю"; continue; }
+    rm -rf "$_cand" && { grn "  − $_cb/ (распакованное зеркало)"
+                         note "$_cr|v$_cv|папка|удалена локально"; MIR_DEL=$((MIR_DEL+1)); }
+  done
+  return 0
 }
 
 # --- поиск CHANGELOG где угодно в дереве ----------------------------------------
@@ -636,6 +672,12 @@ if [ ! -s "$INDEX" ]; then
     [ "$N_SERVICE" -gt 0 ] && plain "  · служебные загрузки из чата: $N_SERVICE"
     [ -n "$DUPES" ]  && plain "  · рабочие копии и дубликаты"
     [ -n "$UNKNOWN" ] && plain "  · архивы без версии в имени"
+  fi
+  # Архивов нет, но распакованные зеркала могли остаться — убираем и их.
+  if [ "$DELETE_AFTER" = "1" ] && [ "$HAVE_GH" -eq 1 ]; then
+    echo ""; bld "── Убираю распакованные копии того, что полностью на GitHub"
+    MIR_DEL=0; cleanup_mirrors
+    [ "$MIR_DEL" -gt 0 ] && grn "  удалено: $MIR_DEL" || plain "  удалять нечего"
   fi
   echo ""
   ylw "Если ждал другого — проверь папку и имена: канон <repo>-vX.Y.Z.zip"
@@ -1081,7 +1123,6 @@ fi
 # прогоне: архив мог уехать на GitHub раньше, и его всё равно надо убрать с диска.
 if [ "$DELETE_AFTER" = "1" ] && [ "$HAVE_GH" -eq 1 ]; then
   echo ""; bld "── Убираю локальные копии того, что полностью на GitHub"
-  INDEX_ALL="$INDEX"
   _del=0; _kept=""
   while IFS="$(printf '\t')" read -r r v z; do
     [ -n "$r" ] && [ -f "$z" ] || continue
@@ -1093,30 +1134,7 @@ if [ "$DELETE_AFTER" = "1" ] && [ "$HAVE_GH" -eq 1 ]; then
   $(basename "$z") — не хватает:$_m"
     fi
   done < "$INDEX"
-  # Распакованные зеркала. Удаляем ТОЛЬКО то, что доказуемо является копией
-  # опубликованной версии. Пять условий, все обязательны:
-  #   1) имя каталога разбирается как <repo>-vX.Y.Z (с точками или подчёркиваниями);
-  #   2) внутри есть VERSION, и он совпадает с версией из имени;
-  #   3) внутри НЕТ .git — иначе это рабочий клон, а не распакованный архив;
-  #   4) версия полностью на GitHub;
-  #   5) имя репы из каталога совпадает с обработанной в этом прогоне.
-  # Каталог без версии в имени (например `personal-finance-dss`) не трогается никогда:
-  # это рабочая копия владельца.
-  while IFS="$(printf '\t')" read -r r v z; do
-    [ -n "$r" ] || continue
-    for _cand in "$DIR/$r-v$v" "$DIR/${r}_v$(printf '%s' "$v" | tr '.' '_')" \
-                 "$DIR/$r-v$(printf '%s' "$v" | tr '.' '_')"; do
-      [ -d "$_cand" ] || continue
-      [ -d "$_cand/.git" ] && { ylw "  ~ $(basename "$_cand") — это git-клон, не трогаю"; continue; }
-      [ -f "$_cand/VERSION" ] || { ylw "  ~ $(basename "$_cand") — нет VERSION, не трогаю"; continue; }
-      [ "$(tr -d ' \n\r' < "$_cand/VERSION")" = "$v" ] || {
-        ylw "  ~ $(basename "$_cand") — VERSION не совпал, не трогаю"; continue; }
-      [ -z "$(missing_parts "$r" "$v")" ] || {
-        ylw "  ~ $(basename "$_cand") — на GitHub не всё, не трогаю"; continue; }
-      rm -rf "$_cand" && { grn "  − $(basename "$_cand")/ (распакованное зеркало)"
-                           note "$r|v$v|папка|удалена локально"; _del=$((_del+1)); }
-    done
-  done < "$INDEX_ALL"
+  MIR_DEL=0; cleanup_mirrors; _del=$((_del + MIR_DEL))
   [ "$_del" -gt 0 ] && grn "  удалено: $_del" || plain "  удалять нечего"
   if [ -n "$_kept" ]; then
     echo ""; ylw "  оставлены (на GitHub не всё):"

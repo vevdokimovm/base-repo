@@ -988,7 +988,12 @@ mkdir -p "$D/mir-repo-v9.9.9"
 mkdir -p "$D/mir-repo-v1.0.0-bad"; printf '7.7.7' > "$D/mir-repo-v1.0.0-bad/VERSION"
 # 6) рабочая папка без версии в имени — НЕ трогать никогда
 mkdir -p "$D/mir-repo"; printf 'что-то своё' > "$D/mir-repo/notes.md"
+# 7) ГЛАВНОЕ: зеркало версии, ЧЬЕГО АРХИВА В ПАПКЕ УЖЕ НЕТ (удалён прошлым прогоном)
+make_zip "$D" "old-mir-repo" "2.0.0" dot
+KEEP_ARCHIVES=0 run_deploy "$D" >/dev/null      # публикуем и архив уходит
+mkdir -p "$D/old-mir-repo-v2.0.0"; printf '2.0.0' > "$D/old-mir-repo-v2.0.0/VERSION"
 OUT="$(KEEP_ARCHIVES=0 run_deploy "$D")"
+[ ! -d "$D/old-mir-repo-v2.0.0" ] && ok "зеркало без архива тоже убрано" || bad "зеркало без архива тоже убрано"
 [ ! -d "$D/mir-repo-v1.0.0" ] && ok "зеркало с точками убрано" || bad "зеркало с точками убрано"
 [ ! -d "$D/mir-repo-v1_0_0" ] && ok "зеркало с подчёркиваниями убрано" || bad "зеркало с подчёркиваниями убрано"
 [ -d "$D/mir-repo-v1.0.0-clone/.git" ] && ok "git-клон цел" || bad "git-клон цел"
