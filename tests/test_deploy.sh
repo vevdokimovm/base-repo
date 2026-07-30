@@ -972,6 +972,31 @@ OUT="$(KEEP_ARCHIVES=0 run_deploy "$D2")"
 [ -f "$D2/hold-repo-v1.0.0.zip" ] && ok "без релиза архив оставлен" || bad "без релиза архив оставлен"
 assert_contains "причина названа" "$OUT" "не хватает"
 
+case_ "G13" "Распакованные зеркала убираются, рабочие клоны — никогда"
+D="$SANDBOX/tG13"; mkdir -p "$D"
+make_zip "$D" "mir-repo" "1.0.0" dot
+KEEP_ARCHIVES=1 run_deploy "$D" >/dev/null
+# 1) честное зеркало: имя с версией, VERSION совпадает, нет .git
+mkdir -p "$D/mir-repo-v1.0.0"; printf '1.0.0' > "$D/mir-repo-v1.0.0/VERSION"
+# 2) зеркало с подчёркиваниями — тоже должно уйти
+mkdir -p "$D/mir-repo-v1_0_0"; printf '1.0.0' > "$D/mir-repo-v1_0_0/VERSION"
+# 3) git-клон — НЕ трогать
+mkdir -p "$D/mir-repo-v1.0.0-clone/.git"; printf '1.0.0' > "$D/mir-repo-v1.0.0-clone/VERSION"
+# 4) каталог без VERSION — НЕ трогать
+mkdir -p "$D/mir-repo-v9.9.9"
+# 5) каталог с чужой версией внутри — НЕ трогать
+mkdir -p "$D/mir-repo-v1.0.0-bad"; printf '7.7.7' > "$D/mir-repo-v1.0.0-bad/VERSION"
+# 6) рабочая папка без версии в имени — НЕ трогать никогда
+mkdir -p "$D/mir-repo"; printf 'что-то своё' > "$D/mir-repo/notes.md"
+OUT="$(KEEP_ARCHIVES=0 run_deploy "$D")"
+[ ! -d "$D/mir-repo-v1.0.0" ] && ok "зеркало с точками убрано" || bad "зеркало с точками убрано"
+[ ! -d "$D/mir-repo-v1_0_0" ] && ok "зеркало с подчёркиваниями убрано" || bad "зеркало с подчёркиваниями убрано"
+[ -d "$D/mir-repo-v1.0.0-clone/.git" ] && ok "git-клон цел" || bad "git-клон цел"
+[ -d "$D/mir-repo-v9.9.9" ] && ok "каталог без VERSION цел" || bad "каталог без VERSION цел"
+[ -d "$D/mir-repo-v1.0.0-bad" ] && ok "каталог с чужой версией цел" || bad "каталог с чужой версией цел"
+[ -f "$D/mir-repo/notes.md" ] && ok "рабочая папка без версии цела" || bad "рабочая папка без версии цела"
+assert_contains "зеркало названо в выводе" "$OUT" "распакованное зеркало"
+
 # =============================================================================
 printf '\n\033[1m── Покрытие по зонам\033[0m\n'
 grp_name(){

@@ -81,7 +81,7 @@ REMOTE_BASE="${REMOTE_BASE:-https://github.com/$OWNER}"   # переопреде
 MIN_FILES="${MIN_FILES:-5}"
 PRIVATE="${PRIVATE:-1}"
 ASSET="${ASSET:-1}"
-SCRIPT_VERSION="4.0.0"
+SCRIPT_VERSION="4.1.0"
 DRY="${DRY:-0}"
 AUDIT="${AUDIT:-0}"          # 1 = полная ревизия ВСЕХ релизов (долго)
 VERIFY="${VERIFY:-0}"        # 1 = только проверка «что можно удалять локально»
@@ -1080,7 +1080,8 @@ fi
 # Отдельным проходом по ВСЕМ архивам папки, а не только по опубликованным в этом
 # прогоне: архив мог уехать на GitHub раньше, и его всё равно надо убрать с диска.
 if [ "$DELETE_AFTER" = "1" ] && [ "$HAVE_GH" -eq 1 ]; then
-  echo ""; bld "── Удаляю архивы, которые полностью на GitHub"
+  echo ""; bld "── Убираю локальные копии того, что полностью на GitHub"
+  INDEX_ALL="$INDEX"
   _del=0; _kept=""
   while IFS="$(printf '\t')" read -r r v z; do
     [ -n "$r" ] && [ -f "$z" ] || continue
@@ -1092,7 +1093,31 @@ if [ "$DELETE_AFTER" = "1" ] && [ "$HAVE_GH" -eq 1 ]; then
   $(basename "$z") — не хватает:$_m"
     fi
   done < "$INDEX"
-  [ "$_del" -gt 0 ] && grn "  удалено архивов: $_del" || plain "  удалять нечего"
+  # Распакованные зеркала. Удаляем ТОЛЬКО то, что доказуемо является копией
+  # опубликованной версии. Пять условий, все обязательны:
+  #   1) имя каталога разбирается как <repo>-vX.Y.Z (с точками или подчёркиваниями);
+  #   2) внутри есть VERSION, и он совпадает с версией из имени;
+  #   3) внутри НЕТ .git — иначе это рабочий клон, а не распакованный архив;
+  #   4) версия полностью на GitHub;
+  #   5) имя репы из каталога совпадает с обработанной в этом прогоне.
+  # Каталог без версии в имени (например `personal-finance-dss`) не трогается никогда:
+  # это рабочая копия владельца.
+  while IFS="$(printf '\t')" read -r r v z; do
+    [ -n "$r" ] || continue
+    for _cand in "$DIR/$r-v$v" "$DIR/${r}_v$(printf '%s' "$v" | tr '.' '_')" \
+                 "$DIR/$r-v$(printf '%s' "$v" | tr '.' '_')"; do
+      [ -d "$_cand" ] || continue
+      [ -d "$_cand/.git" ] && { ylw "  ~ $(basename "$_cand") — это git-клон, не трогаю"; continue; }
+      [ -f "$_cand/VERSION" ] || { ylw "  ~ $(basename "$_cand") — нет VERSION, не трогаю"; continue; }
+      [ "$(tr -d ' \n\r' < "$_cand/VERSION")" = "$v" ] || {
+        ylw "  ~ $(basename "$_cand") — VERSION не совпал, не трогаю"; continue; }
+      [ -z "$(missing_parts "$r" "$v")" ] || {
+        ylw "  ~ $(basename "$_cand") — на GitHub не всё, не трогаю"; continue; }
+      rm -rf "$_cand" && { grn "  − $(basename "$_cand")/ (распакованное зеркало)"
+                           note "$r|v$v|папка|удалена локально"; _del=$((_del+1)); }
+    done
+  done < "$INDEX_ALL"
+  [ "$_del" -gt 0 ] && grn "  удалено: $_del" || plain "  удалять нечего"
   if [ -n "$_kept" ]; then
     echo ""; ylw "  оставлены (на GitHub не всё):"
     printf '%s\n' "$_kept" | sed '/^$/d'
