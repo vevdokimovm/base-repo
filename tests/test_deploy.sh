@@ -80,7 +80,9 @@ make_zip(){
   rm -rf "$tmp"
 }
 
-run_deploy(){ ( cd "$1" && bash "$DEPLOY" "$1" 2>&1 ); }
+# Большинство кейсов переиспользуют архив после публикации, поэтому по умолчанию
+# в тестах архивы сохраняются. Кейсы про удаление ставят KEEP_ARCHIVES=0 явно.
+run_deploy(){ ( cd "$1" && KEEP_ARCHIVES="${KEEP_ARCHIVES:-1}" bash "$DEPLOY" "$1" 2>&1 ); }
 tag_tree_version(){ git -C "$1" show "v$2:VERSION" 2>/dev/null | tr -d ' \n'; }
 
 # =============================================================================
@@ -836,10 +838,17 @@ make_zip "$D" "color-repo" "1.0.0" dot
 OUT="$(NO_COLOR= run_deploy "$D" 2>&1)"
 printf '%s' "$OUT" | grep -q "$(printf '\033')\[2m" && bad "в выводе нет dim" || ok "в выводе нет dim"
 
-case_ "A7" "Подсказка про освобождение места печатается каждый прогон"
-OUT="$(run_deploy "$D")"
-assert_contains "сказано, как узнать про удаление" "$OUT" "VERIFY=1"
-assert_contains "объяснено зачем" "$OUT" "Освободить место"
+case_ "A7" "Дефолтный прогон сам убирает опубликованные архивы"
+D="$SANDBOX/tA7"; mkdir -p "$D"
+make_zip "$D" "a7-repo" "1.0.0" dot
+OUT="$(KEEP_ARCHIVES=0 run_deploy "$D")"
+assert_contains "блок уборки есть без флагов" "$OUT" "полностью на GitHub"
+[ ! -f "$D/a7-repo-v1.0.0.zip" ] && ok "архив убран" || bad "архив убран"
+# с отключением — подсказка, как посмотреть список (нужен свежий архив)
+make_zip "$D" "a7b-repo" "1.0.0" dot
+OUT="$(KEEP_ARCHIVES=1 run_deploy "$D")"
+assert_contains "сказано, что не удалялись" "$OUT" "KEEP_ARCHIVES=1"
+assert_contains "показан способ посмотреть" "$OUT" "VERIFY=1"
 
 case_ "G7" "Точка в имени ассета не матчит подчёркивание (потеря данных)"
 D="$SANDBOX/tG7"; mkdir -p "$D"
@@ -892,11 +901,13 @@ rm -rf "${TMPDIR:-/tmp}"/repo_deploy_* 2>/dev/null || true
 case_ "G10" "DELETE_AFTER удаляет архив только при подтверждённой публикации"
 D="$SANDBOX/tG10"; mkdir -p "$D"
 make_zip "$D" "del-repo" "1.0.0" dot
-run_deploy "$D" >/dev/null
-[ -f "$D/del-repo-v1.0.0.zip" ] && ok "без флага архив на месте" || bad "без флага архив на месте"
+KEEP_ARCHIVES=1 run_deploy "$D" >/dev/null
+[ -f "$D/del-repo-v1.0.0.zip" ] && ok "KEEP_ARCHIVES=1 сохраняет архив" || bad "KEEP_ARCHIVES=1 сохраняет архив"
+KEEP_ARCHIVES=0 run_deploy "$D" >/dev/null
+[ ! -f "$D/del-repo-v1.0.0.zip" ] && ok "по умолчанию архив удаляется" || bad "по умолчанию архив удаляется"
 D2="$SANDBOX/tG10b"; mkdir -p "$D2"
 make_zip "$D2" "del2-repo" "1.0.0" dot
-OUT="$(DELETE_AFTER=1 run_deploy "$D2")"
+OUT="$(KEEP_ARCHIVES=0 run_deploy "$D2")"
 assert_contains "есть блок автоудаления" "$OUT" "полностью на GitHub"
 assert_contains "имя удалённого названо" "$OUT" "del2-repo-v1.0.0.zip"
 [ ! -f "$D2/del2-repo-v1.0.0.zip" ] && ok "архив удалён после публикации" || bad "архив удалён после публикации"
@@ -910,7 +921,7 @@ make_zip "$D3" "del3-repo" "1.0.0" dot
 tmp="$(mktemp -d)"; ( cd "$tmp" && unzip -qo "$D3/del3-repo-v1.0.0.zip" )
 printf '# CHANGELOG\n\nСекций нет.\n' > "$tmp/del3-repo-v1.0.0/CHANGELOG.md"
 rm "$D3/del3-repo-v1.0.0.zip"; ( cd "$tmp" && zip -qr "$D3/del3-repo-v1.0.0.zip" . ); rm -rf "$tmp"
-DELETE_AFTER=1 run_deploy "$D3" >/dev/null
+KEEP_ARCHIVES=0 run_deploy "$D3" >/dev/null
 [ -f "$D3/del3-repo-v1.0.0.zip" ] && ok "без релиза архив НЕ удалён" || bad "без релиза архив НЕ удалён"
 
 case_ "G11" "Печатаемая команда удаления переносима и работает с пробелами"
@@ -935,7 +946,7 @@ assert_contains "объяснено, чем это грозит" "$OUT" "нед�
 case_ "C11" "Папка после автоудаления — успех, а не ошибка"
 D="$SANDBOX/tC11"; mkdir -p "$D"
 make_zip "$D" "empty-after-repo" "1.0.0" dot
-DELETE_AFTER=1 run_deploy "$D" >/dev/null
+KEEP_ARCHIVES=0 run_deploy "$D" >/dev/null
 [ -z "$(ls -1 "$D"/*.zip 2>/dev/null)" ] && ok "архив удалён после публикации" || bad "архив удалён после публикации"
 OUT="$(run_deploy "$D" || true)"
 assert_contains "повторный прогон говорит спокойно" "$OUT" "Публиковать нечего"
@@ -946,9 +957,9 @@ assert_missing "без слова ОШИБКА" "$OUT" "ОШИБКА"
 case_ "G12" "DELETE_AFTER удаляет и то, что опубликовано прошлым прогоном"
 D="$SANDBOX/tG12"; mkdir -p "$D"
 make_zip "$D" "prev-repo" "1.0.0" dot
-run_deploy "$D" >/dev/null                       # публикуем БЕЗ флага
+KEEP_ARCHIVES=1 run_deploy "$D" >/dev/null       # публикуем, архив сохраняем
 [ -f "$D/prev-repo-v1.0.0.zip" ] && ok "после публикации архив на месте" || bad "после публикации архив на месте"
-OUT="$(DELETE_AFTER=1 run_deploy "$D")"          # флаг в СЛЕДУЮЩЕМ прогоне
+OUT="$(KEEP_ARCHIVES=0 run_deploy "$D")"          # обычный прогон СЛЕДУЮЩИМ запуском
 assert_contains "версия уже была опубликована" "$OUT" "тег есть, пропускаю"
 [ ! -f "$D/prev-repo-v1.0.0.zip" ] && ok "архив всё равно удалён" || bad "архив всё равно удалён"
 # а неопубликованный — остаётся, с указанием причины
@@ -957,7 +968,7 @@ make_zip "$D2" "hold-repo" "1.0.0" dot
 tmp="$(mktemp -d)"; ( cd "$tmp" && unzip -qo "$D2/hold-repo-v1.0.0.zip" )
 printf '# CHANGELOG\n\nСекций нет.\n' > "$tmp/hold-repo-v1.0.0/CHANGELOG.md"
 rm "$D2/hold-repo-v1.0.0.zip"; ( cd "$tmp" && zip -qr "$D2/hold-repo-v1.0.0.zip" . ); rm -rf "$tmp"
-OUT="$(DELETE_AFTER=1 run_deploy "$D2")"
+OUT="$(KEEP_ARCHIVES=0 run_deploy "$D2")"
 [ -f "$D2/hold-repo-v1.0.0.zip" ] && ok "без релиза архив оставлен" || bad "без релиза архив оставлен"
 assert_contains "причина названа" "$OUT" "не хватает"
 

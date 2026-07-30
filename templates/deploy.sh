@@ -81,7 +81,7 @@ REMOTE_BASE="${REMOTE_BASE:-https://github.com/$OWNER}"   # переопреде
 MIN_FILES="${MIN_FILES:-5}"
 PRIVATE="${PRIVATE:-1}"
 ASSET="${ASSET:-1}"
-SCRIPT_VERSION="3.4.0"
+SCRIPT_VERSION="4.0.0"
 DRY="${DRY:-0}"
 AUDIT="${AUDIT:-0}"          # 1 = полная ревизия ВСЕХ релизов (долго)
 VERIFY="${VERIFY:-0}"        # 1 = только проверка «что можно удалять локально»
@@ -89,7 +89,12 @@ ALL_REPOS="${ALL_REPOS:-0}"  # 1 = взять ВСЕ репы из repos-map, а
 # Дубль под старым именем — нарушение §42 (ассетов должно быть ровно 3), поэтому
 # снимается при обычном приведении к стандарту. Это НЕ отдельный флаг: владелец не
 # обязан помнить спецкоманду, чтобы получить релиз по стандарту.
-DELETE_AFTER="${DELETE_AFTER:-0}"   # 1 = удалять архив сразу после подтверждённой публикации
+# Архив, полностью уехавший на GitHub (тег + релиз + ассет), — это дубликат того,
+# что уже лежит в репе. Держать его на диске незачем, поэтому удаление опубликованных
+# архивов включено ПО УМОЛЧАНИЮ. Отключается KEEP_ARCHIVES=1.
+KEEP_ARCHIVES="${KEEP_ARCHIVES:-0}"
+DELETE_AFTER="${DELETE_AFTER:-1}"
+[ "$KEEP_ARCHIVES" = "1" ] && DELETE_AFTER=0
 MIN_FREE_MB="${MIN_FREE_MB:-2048}"  # ниже этого порога свободного места прогон не начинается
 KEEP_LEGACY_ASSETS="${KEEP_LEGACY_ASSETS:-0}"   # 1 = НЕ снимать дубли (страховка)
 DROP_LEGACY_ASSETS="${DROP_LEGACY_ASSETS:-1}"   # оставлен для совместимости
@@ -1098,7 +1103,7 @@ printf '%s\n' "$SUMMARY" > "$HOME/Downloads/deploy_last_run.log"
 # Владельцу не нужно помнить про режим — говорим сами, каждый раз.
 echo ""
 if [ "$DELETE_AFTER" != "1" ]; then
-cyn "Освободить место: какие архивы уже полностью на GitHub и их можно удалить —"
+cyn "Архивы не удалялись (KEEP_ARCHIVES=1). Посмотреть, что уже можно убрать —"
 cyn "  VERIFY=1 zsh $0"
 fi
 echo ""; cyn "лог: ~/Downloads/deploy_last_run.log"
