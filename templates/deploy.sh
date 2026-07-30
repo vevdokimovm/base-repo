@@ -81,7 +81,7 @@ REMOTE_BASE="${REMOTE_BASE:-https://github.com/$OWNER}"   # переопреде
 MIN_FILES="${MIN_FILES:-5}"
 PRIVATE="${PRIVATE:-1}"
 ASSET="${ASSET:-1}"
-SCRIPT_VERSION="4.1.1"
+SCRIPT_VERSION="4.2.0"
 DRY="${DRY:-0}"
 AUDIT="${AUDIT:-0}"          # 1 = полная ревизия ВСЕХ релизов (долго)
 VERIFY="${VERIFY:-0}"        # 1 = только проверка «что можно удалять локально»
@@ -263,6 +263,20 @@ release_state(){
   return 1
 }
 
+# Уборка рабочей папки. Объявлена здесь, как и все функции: ссылки на $WORK
+# разрешаются в момент вызова, а не объявления, поэтому порядок безопасен.
+cleanup_work(){
+  _rc=$?
+  if [ "${KEEP_WORK:-0}" = "1" ]; then
+    printf '%s\n' "рабочая папка оставлена: $WORK"
+  else
+    cd "$HOME" 2>/dev/null || cd /
+    rm -rf "$WORK" 2>/dev/null
+  fi
+  rm -f "${INDEX:-}" "${REPOLIST:-}" "${PARSER:-}" 2>/dev/null
+  exit "$_rc"
+}
+
 # Полностью ли версия опубликована: тег на remote + релиз + канонический ассет.
 # Одна функция на VERIFY и на DELETE_AFTER — иначе они разъедутся.
 # Печатает список недостающего; пусто = всё на месте.
@@ -305,9 +319,20 @@ cleanup_mirrors(){
       case "$_m" in "$_cr="*) _cr="${_m#*=}" ;; esac
     done
     [ -d "$_cand/.git" ] && { ylw "  ~ $_cb/ — git-клон, не трогаю"; continue; }
-    [ -f "$_cand/VERSION" ] || { ylw "  ~ $_cb/ — нет VERSION, не трогаю"; continue; }
-    [ "$(tr -d ' \n\r' < "$_cand/VERSION")" = "$_cv" ] || {
-      ylw "  ~ $_cb/ — VERSION не совпал, не трогаю"; continue; }
+    # VERSION ищем в корне И на уровень глубже: macOS распаковывает foo.zip в папку
+    # foo/, а внутри архива уже есть обёртка — VERSION оказывается на глубине 2.
+    _cver=""
+    for _vf in "$_cand/VERSION" "$_cand"/*/VERSION; do
+      [ -f "$_vf" ] || continue
+      _cver="$(tr -d ' \n\r' < "$_vf")"; break
+    done
+    [ -n "$_cver" ] || { ylw "  ~ $_cb/ — нет VERSION, не трогаю"; continue; }
+    [ "$_cver" = "$_cv" ] || { ylw "  ~ $_cb/ — VERSION=$_cver ≠ $_cv, не трогаю"; continue; }
+    # .git может быть тоже на уровень глубже
+    for _g in "$_cand/.git" "$_cand"/*/.git; do
+      [ -e "$_g" ] && { ylw "  ~ $_cb/ — git-клон внутри, не трогаю"; _cver=""; break; }
+    done
+    [ -n "$_cver" ] || continue
     _mm="$(missing_parts "$_cr" "$_cv")"
     [ -z "$_mm" ] || { ylw "  ~ $_cb/ — на GitHub не хватает:$_mm — не трогаю"; continue; }
     rm -rf "$_cand" && { grn "  − $_cb/ (распакованное зеркало)"
@@ -782,17 +807,6 @@ fi
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/repo_deploy_XXXXXX")"
 # Уборка при ЛЮБОМ выходе: нормальном, по ошибке, по Ctrl+C. Раньше стояла последней
 # строкой скрипта, и до неё просто не доходило.
-cleanup_work(){
-  _rc=$?
-  if [ "${KEEP_WORK:-0}" = "1" ]; then
-    printf '%s\n' "рабочая папка оставлена: $WORK"
-  else
-    cd "$HOME" 2>/dev/null || cd /
-    rm -rf "$WORK" 2>/dev/null
-  fi
-  rm -f "${INDEX:-}" "${REPOLIST:-}" "${PARSER:-}" 2>/dev/null
-  exit "$_rc"
-}
 trap cleanup_work EXIT INT TERM
 mkdir -p "$WORK" || die "mkdir $WORK"
 NEW_REPOS=""

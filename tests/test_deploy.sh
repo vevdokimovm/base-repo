@@ -905,6 +905,10 @@ KEEP_ARCHIVES=1 run_deploy "$D" >/dev/null
 [ -f "$D/del-repo-v1.0.0.zip" ] && ok "KEEP_ARCHIVES=1 сохраняет архив" || bad "KEEP_ARCHIVES=1 сохраняет архив"
 KEEP_ARCHIVES=0 run_deploy "$D" >/dev/null
 [ ! -f "$D/del-repo-v1.0.0.zip" ] && ok "по умолчанию архив удаляется" || bad "по умолчанию архив удаляется"
+# DELETE_AFTER оставлен для совместимости: 0 сохраняет архив
+make_zip "$D" "legacy-flag-repo" "1.0.0" dot
+DELETE_AFTER=0 KEEP_ARCHIVES=0 run_deploy "$D" >/dev/null
+[ -f "$D/legacy-flag-repo-v1.0.0.zip" ] && ok "DELETE_AFTER=0 сохраняет архив" || bad "DELETE_AFTER=0 сохраняет архив"
 D2="$SANDBOX/tG10b"; mkdir -p "$D2"
 make_zip "$D2" "del2-repo" "1.0.0" dot
 OUT="$(KEEP_ARCHIVES=0 run_deploy "$D2")"
@@ -988,10 +992,17 @@ mkdir -p "$D/mir-repo-v9.9.9"
 mkdir -p "$D/mir-repo-v1.0.0-bad"; printf '7.7.7' > "$D/mir-repo-v1.0.0-bad/VERSION"
 # 6) рабочая папка без версии в имени — НЕ трогать никогда
 mkdir -p "$D/mir-repo"; printf 'что-то своё' > "$D/mir-repo/notes.md"
+# 6б) зеркало с VERSION на уровень глубже (macOS распаковал zip с обёрткой внутрь папки)
+make_zip "$D" "deepmir-repo" "1.0.0" dot
+# 6в) git-клон на уровень глубже — НЕ трогать
+make_zip "$D" "dgmir-repo" "1.0.0" dot
 # 7) ГЛАВНОЕ: зеркало версии, ЧЬЕГО АРХИВА В ПАПКЕ УЖЕ НЕТ (удалён прошлым прогоном)
 make_zip "$D" "old-mir-repo" "2.0.0" dot
 KEEP_ARCHIVES=0 run_deploy "$D" >/dev/null      # публикуем и архив уходит
 mkdir -p "$D/old-mir-repo-v2.0.0"; printf '2.0.0' > "$D/old-mir-repo-v2.0.0/VERSION"
+# зеркала для 6б/6в создаём ПОСЛЕ публикации их реп
+mkdir -p "$D/deepmir-repo-v1.0.0/inner"; printf '1.0.0' > "$D/deepmir-repo-v1.0.0/inner/VERSION"
+mkdir -p "$D/dgmir-repo-v1.0.0/inner/.git"; printf '1.0.0' > "$D/dgmir-repo-v1.0.0/inner/VERSION"
 OUT="$(KEEP_ARCHIVES=0 run_deploy "$D")"
 [ ! -d "$D/old-mir-repo-v2.0.0" ] && ok "зеркало без архива тоже убрано" || bad "зеркало без архива тоже убрано"
 [ ! -d "$D/mir-repo-v1.0.0" ] && ok "зеркало с точками убрано" || bad "зеркало с точками убрано"
@@ -1001,6 +1012,8 @@ OUT="$(KEEP_ARCHIVES=0 run_deploy "$D")"
 [ -d "$D/mir-repo-v1.0.0-bad" ] && ok "каталог с чужой версией цел" || bad "каталог с чужой версией цел"
 [ -f "$D/mir-repo/notes.md" ] && ok "рабочая папка без версии цела" || bad "рабочая папка без версии цела"
 assert_contains "зеркало названо в выводе" "$OUT" "распакованное зеркало"
+[ ! -d "$D/deepmir-repo-v1.0.0" ] && ok "VERSION на глубине 2 найден" || bad "VERSION на глубине 2 найден"
+[ -d "$D/dgmir-repo-v1.0.0/inner/.git" ] && ok "git-клон на глубине 2 цел" || bad "git-клон на глубине 2 цел"
 
 # =============================================================================
 printf '\n\033[1m── Покрытие по зонам\033[0m\n'
